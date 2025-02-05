@@ -71,18 +71,12 @@ if [[ "$1" == "k8s-bootstrap" ]]; then
         export IP_POOL=$PI_IP_POOL
         envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
 
-        export PV_HOSTS=$PI_HOSTS
-        envsubst < templates/persistent-volume-config.yaml > temp/pv.yaml
-
         echo "----- Generate the inventory yaml file -----"
         envsubst < config/pi-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
     elif [[ "$2" == "vms" ]]; then
         export IP_POOL=$VMS_IP_POOL
         envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
-
-        export PV_HOSTS=$VM_HOSTS
-        envsubst < templates/persistent-volume-config.yaml > temp/pv.yaml
 
         echo "----- Generate the inventory yaml file -----"
         envsubst < templates/vms-k8s-inventory.yaml > temp/inventory-updated.yaml
