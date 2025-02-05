@@ -8,7 +8,8 @@ This repo will help you bootstrap or destroy the k8s clusters that are provision
   * ansible
   * direnv
 * Update the [.envrc](./.envrc) file with your hosts names, username and passwords
-* Update the inventory [yamls](./config) if setting up on vms or k8s
+* Generate the inventory yaml using the script `./generate-k8s-inventory.sh`, that will generate the inventory files in the [config](./config/) folder
+* Validate and update the inventory [yamls](./config) if setting up on vms or k8s
 
 ### Bootstrap k8s on pi/vms
 To do this, its simple, just run the script `./run-anisble.sh` with the appropriate options
@@ -32,6 +33,15 @@ ok: [k8s-node-1] => {
     ]
 }
 ```
+
+The following are provisioned:
+* Kubernetes cluster
+* CNI - canal
+* conatinerd
+* metallb
+* kubernetes dashboard
+* nfs storage provider using your nfs configuration
+* nginx ingress controller
 
 ### Destroy k8s on pi/vms
 Its similar to bootstrapping, but the command and options are different

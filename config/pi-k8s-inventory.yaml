@@ -1,48 +1,48 @@
 all:
   hosts:
     pi4-node-1:
-      ansible_host: pi4-node-1.example.com
-      ansible_user: $PI_VM_USER
-      ansible_ssh_pass: $PI_VM_PASSWORD
+      ansible_host: pi4-node-1
+      ansible_user: $PI_USER
+      ansible_ssh_pass: $PI_PASSWORD
       ansible_become: yes
       ansible_become_method: sudo
-      ansible_become_password: $PI_VM_SUDO_PASSWORD
+      ansible_become_password: $PI_SUDO_PASSWORD
     pi4-node-2:
-      ansible_host: pi4-node-2.example.com
-      ansible_user: $PI_VM_USER
-      ansible_ssh_pass: $PI_VM_PASSWORD
+      ansible_host: pi4-node-2
+      ansible_user: $PI_USER
+      ansible_ssh_pass: $PI_PASSWORD
       ansible_become: yes
       ansible_become_method: sudo
-      ansible_become_password: $PI_VM_SUDO_PASSWORD
+      ansible_become_password: $PI_SUDO_PASSWORD
     pi4-node-3:
-      ansible_host: pi4-node-3.example.com
-      ansible_user: $PI_VM_USER
-      ansible_ssh_pass: $PI_VM_PASSWORD
+      ansible_host: pi4-node-3
+      ansible_user: $PI_USER
+      ansible_ssh_pass: $PI_PASSWORD
       ansible_become: yes
       ansible_become_method: sudo
-      ansible_become_password: $PI_VM_SUDO_PASSWORD
+      ansible_become_password: $PI_SUDO_PASSWORD
 control_plane:
   hosts:
     pi4-node-1:
-      ansible_host: pi4-node-1.example.com
-      ansible_user: $PI_VM_USER
-      ansible_ssh_pass: $PI_VM_PASSWORD
+      ansible_host: pi4-node-1
+      ansible_user: $PI_USER
+      ansible_ssh_pass: $PI_PASSWORD
       ansible_become: yes
       ansible_become_method: sudo
-      ansible_become_password: $PI_VM_SUDO_PASSWORD
-worker_nodes:
+      ansible_become_password: $PI_SUDO_PASSWORD
+worker_str:
   hosts:
     pi4-node-2:
-      ansible_host: pi4-node-2.example.com
-      ansible_user: $PI_VM_USER
-      ansible_ssh_pass: $PI_VM_PASSWORD
+      ansible_host: pi4-node-2
+      ansible_user: $PI_USER
+      ansible_ssh_pass: $PI_PASSWORD
       ansible_become: yes
       ansible_become_method: sudo
-      ansible_become_password: $PI_VM_SUDO_PASSWORD
+      ansible_become_password: $PI_SUDO_PASSWORD
     pi4-node-3:
-      ansible_host: pi4-node-3.example.com
-      ansible_user: $PI_VM_USER
-      ansible_ssh_pass: $PI_VM_PASSWORD
+      ansible_host: pi4-node-3
+      ansible_user: $PI_USER
+      ansible_ssh_pass: $PI_PASSWORD
       ansible_become: yes
       ansible_become_method: sudo
-      ansible_become_password: $PI_VM_SUDO_PASSWORD
+      ansible_become_password: $PI_SUDO_PASSWORD
