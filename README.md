@@ -36,11 +36,11 @@ ok: [k8s-node-1] => {
 
 The following are provisioned:
 * Kubernetes cluster
-* CNI - canal
-* conatinerd
-* metallb
+  * CNI - canal
+  * containerd
+* metallb loadbalancer that uses the IP Pool's from your .envrc
 * kubernetes dashboard
-* nfs storage provider using your nfs configuration
+* nfs storage provider using your nfs configuration from your .envrc
 * nginx ingress controller
 
 ### Destroy k8s on pi/vms
