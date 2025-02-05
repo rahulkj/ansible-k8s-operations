@@ -57,7 +57,6 @@ for v in ${USER_VARIABLES[@]}; do
     fi
 done
 
-echo "----- Generate the inventory yaml file -----"
 cleanupFile
 
 if [[ -z "$1" ]]; then
@@ -75,6 +74,7 @@ if [[ "$1" == "k8s-bootstrap" ]]; then
         export PV_HOSTS=$PI_HOSTS
         envsubst < templates/persistent-volume-config.yaml > temp/pv.yaml
 
+        echo "----- Generate the inventory yaml file -----"
         envsubst < config/pi-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
     elif [[ "$2" == "vms" ]]; then
@@ -84,6 +84,7 @@ if [[ "$1" == "k8s-bootstrap" ]]; then
         export PV_HOSTS=$VM_HOSTS
         envsubst < templates/persistent-volume-config.yaml > temp/pv.yaml
 
+        echo "----- Generate the inventory yaml file -----"
         envsubst < templates/vms-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook config/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
     else
@@ -94,9 +95,11 @@ if [[ "$1" == "k8s-bootstrap" ]]; then
     fi
 elif [[ "$1" == "k8s-destroy" ]]; then
     if [[ "$2" == "pi" ]]; then
+        echo "----- Generate the inventory yaml file -----"
         envsubst < config/pi-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
     elif [[ "$2" == "vms" ]]; then
+        echo "----- Generate the inventory yaml file -----"
         envsubst < config/vms-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
     else
