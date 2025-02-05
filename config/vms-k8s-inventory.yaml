@@ -1,0 +1,48 @@
+all:
+  hosts:
+    k8s-node-1:
+      ansible_host: k8s-node-1.example.com
+      ansible_user: $LINUX_VM_USER
+      ansible_ssh_pass: $LINUX_VM_PASSWORD
+      ansible_become: yes
+      ansible_become_method: sudo
+      ansible_become_password: $LINUX_VM_SUDO_PASSWORD
+    k8s-node-2:
+      ansible_host: k8s-node-2.example.com
+      ansible_user: $LINUX_VM_USER
+      ansible_ssh_pass: $LINUX_VM_PASSWORD
+      ansible_become: yes
+      ansible_become_method: sudo
+      ansible_become_password: $LINUX_VM_SUDO_PASSWORD
+    k8s-node-3:
+      ansible_host: k8s-node-3.example.com
+      ansible_user: $LINUX_VM_USER
+      ansible_ssh_pass: $LINUX_VM_PASSWORD
+      ansible_become: yes
+      ansible_become_method: sudo
+      ansible_become_password: $LINUX_VM_SUDO_PASSWORD
+control_plane:
+  hosts:
+    k8s-node-1:
+      ansible_host: k8s-node-1.example.com
+      ansible_user: $LINUX_VM_USER
+      ansible_ssh_pass: $LINUX_VM_PASSWORD
+      ansible_become: yes
+      ansible_become_method: sudo
+      ansible_become_password: $LINUX_VM_SUDO_PASSWORD
+worker_nodes:
+  hosts:
+    k8s-node-2:
+      ansible_host: k8s-node-2.example.com
+      ansible_user: $LINUX_VM_USER
+      ansible_ssh_pass: $LINUX_VM_PASSWORD
+      ansible_become: yes
+      ansible_become_method: sudo
+      ansible_become_password: $LINUX_VM_SUDO_PASSWORD
+    k8s-node-3:
+      ansible_host: k8s-node-3.example.com
+      ansible_user: $LINUX_VM_USER
+      ansible_ssh_pass: $LINUX_VM_PASSWORD
+      ansible_become: yes
+      ansible_become_method: sudo
+      ansible_become_password: $LINUX_VM_SUDO_PASSWORD
