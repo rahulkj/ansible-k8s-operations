@@ -72,34 +72,34 @@ if [[ "$1" == "k8s-bootstrap" ]]; then
         envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
 
         echo "----- Generate the inventory yaml file -----"
-        envsubst < config/pi-k8s-inventory.yaml > temp/inventory-updated.yaml
+        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
-    elif [[ "$2" == "vms" ]]; then
+    elif [[ "$2" == "vm" ]]; then
         export IP_POOL=$VMS_IP_POOL
         envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
 
         echo "----- Generate the inventory yaml file -----"
-        envsubst < templates/vms-k8s-inventory.yaml > temp/inventory-updated.yaml
+        envsubst < templates/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook config/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
     else
         echo "Usage: ./run-ansible.sh k8s-bootstrap <OPTION>"
         echo "pi: bootstrap k8s environment on pi"
-        echo "vms: bootstrap k8s environment on vms"
+        echo "vm: bootstrap k8s environment on vm"
         exit 1
     fi
 elif [[ "$1" == "k8s-destroy" ]]; then
     if [[ "$2" == "pi" ]]; then
         echo "----- Generate the inventory yaml file -----"
-        envsubst < config/pi-k8s-inventory.yaml > temp/inventory-updated.yaml
+        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
-    elif [[ "$2" == "vms" ]]; then
+    elif [[ "$2" == "vm" ]]; then
         echo "----- Generate the inventory yaml file -----"
-        envsubst < config/vms-k8s-inventory.yaml > temp/inventory-updated.yaml
+        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
         ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
     else
         echo "Usage: ./run-ansible.sh k8s-destroy <OPTION>"
         echo "pi: destroy k8s environment on pi"
-        echo "vms: destroy k8s environment on vms"
+        echo "vm: destroy k8s environment on vm"
         exit 1
     fi
 else 
