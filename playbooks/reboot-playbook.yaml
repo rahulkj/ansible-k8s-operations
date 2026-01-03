@@ -1,0 +1,8 @@
+- name: Reboot systems if apt-updates were applied
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: System Reboot
+      ansible.builtin.reboot:
+      when:
+        - apt_update.changed

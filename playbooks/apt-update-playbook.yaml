@@ -1,0 +1,18 @@
+- name: Update apt-packages on linux vms
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: Ping the hosts
+      ansible.builtin.ping:
+    - name: Update Apt Cache
+      ansible.builtin.apt:
+        update_cache: true
+    - name: Apt Update
+      ansible.builtin.apt:
+        name: "*"
+        state: latest
+      register: apt_update
+    - name: Apt Clean
+      ansible.builtin.apt:
+        autoclean: true
+

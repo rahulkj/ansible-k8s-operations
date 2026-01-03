@@ -1,32 +1,13 @@
+- import_playbook: ../playbooks/apt-update-playbook.yaml
+
 - name: Update apt-packages on linux vms
   hosts: all
   tasks:
-    - name: Ping the hosts
-      ansible.builtin.ping:
-    - name: Update Apt Cache
-      ansible.builtin.apt:
-        update_cache: true
-    - name: Apt Update
-      ansible.builtin.apt:
-        name: "*"
-        state: latest
-      register: apt_update
-    - name: Apt Clean
-      ansible.builtin.apt:
-        autoclean: true
-    - name: System Reboot
-      ansible.builtin.reboot:
-      when:
-        - apt_update.changed
-
-- name: Cleanup worker nodes
-  hosts: worker_nodes
-  tasks:
     - name: Perform reset
       become_user: root
       shell: |
         kubeadm reset -f
-        rm -rf /var/lib/calico /var/lib/containerd /var/lib/kubelet /var/lib/cni /etc/cni/net.d /etc/kubernetes $HOME/.kube 
+        rm -rf /var/lib/calico /var/lib/containerd /var/lib/kubelet /var/lib/cni /etc/cni/net.d /etc/kubernetes /etc/containerd $HOME/.kube
     - name: Remove all the pods, containers, images
       become_user: root
       shell: |
@@ -34,23 +15,4 @@
         crictl rm -a -f
         crictl rmi -a
 
-- hosts: control_plane
-  tasks:
-    - name: Perform reset
-      become_user: root
-      shell: |
-        kubeadm reset -f
-        rm -rf /var/lib/calico /var/lib/containerd /var/lib/kubelet /var/lib/cni /etc/cni/net.d /etc/kubernetes $HOME/.kube
-    - name: Remove all the pods, containers, images
-      become_user: root
-      shell: |
-        crictl rmp -a -f
-        crictl rm -a -f
-        crictl rmi -a
-
-- hosts: all
-  become: true
-  gather_facts: true
-  tasks:
-    - name: System Reboot
-      ansible.builtin.reboot:
+- import_playbook: ../playbooks/reboot-playbook.yaml
