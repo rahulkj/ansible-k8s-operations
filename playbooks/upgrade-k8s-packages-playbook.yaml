@@ -1,0 +1,80 @@
+- hosts: control_plane
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Upgrade Pod network - Canal
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        VERSION=$(curl https://api.github.com/repos/projectcalico/calico/releases | jq -r '.[0] | .tag_name')
+        
+        curl https://raw.githubusercontent.com/projectcalico/calico/$VERSION/manifests/canal.yaml -O
+
+        kubectl apply -f canal.yaml
+        rm canal.yaml
+
+    - name: Upgrade Loadbalancer
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+
+        kubectl get configmap kube-proxy -n kube-system -o yaml | \
+        sed -e "s/strictARP: false/strictARP: true/" | \
+        kubectl apply -f - -n kube-system
+
+        VERSION=$(curl https://api.github.com/repos/metallb/metallb/releases | jq -r '.[0] | .tag_name')
+        wget https://raw.githubusercontent.com/metallb/metallb/$VERSION/config/manifests/metallb-native.yaml -O metallb-native-$VERSION.yaml
+        kubectl apply -f metallb-native-$VERSION.yaml
+        kubectl -n metallb-system rollout status deployment/controller --watch=true
+        rm metallb-native-$VERSION.yaml
+
+    - name: Copy metallb config file
+      copy:
+        src: ../temp/metal-lb-config.yaml
+        dest: /tmp/metal-lb-config.yaml
+
+    - name: Apply metallb config file
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /tmp/metal-lb-config.yaml
+
+    - name: Upgrade NFS storage class
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+
+        helm upgrade --install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+        --create-namespace \
+        --namespace nfs-provisioner \
+        --set nfs.server={{ lookup('ansible.builtin.env', 'NFS_SERVER') }} \
+        --set nfs.path={{ lookup('ansible.builtin.env', 'NFS_MOUNT') }} \
+        --set storageClass.name=nfs-storage \
+        --set storageClass.defaultClass=true
+
+    - name: Copy traefik values file
+      copy:
+        src: ../templates/traefik-values.yaml
+        dest: /tmp/traefik-values.yaml
+
+    - name: Upgrade traefik ingress controller
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        helm repo add traefik https://traefik.github.io/charts
+        helm repo update
+
+        helm upgrade --install traefik traefik/traefik \
+          --create-namespace --namespace traefik \
+          -f /tmp/traefik-values.yaml
+
+    - name: Install headlamp dashboard
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml
+
+    - name: Copy headlamp ingress file
+      copy:
+        src: ../temp/headlamp-ingress.yaml
+        dest: /tmp/headlamp-ingress.yaml
+
+    - name: Expose headlamp dashboard via ingress
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /tmp/headlamp-ingress.yaml

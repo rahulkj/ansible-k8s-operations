@@ -7,12 +7,20 @@
       become_user: root
       shell: |
         kubeadm reset -f
-        rm -rf /var/lib/calico /var/lib/containerd /var/lib/kubelet /var/lib/cni /etc/cni/net.d /etc/kubernetes /etc/containerd $HOME/.kube
+      register: reboot_required
+
     - name: Remove all the pods, containers, images
       become_user: root
       shell: |
         crictl rmp -a -f
         crictl rm -a -f
         crictl rmi -a
+      register: reboot_required
 
+    - name: Delete directories
+      become_user: root
+      shell: |
+        rm -rf /var/lib/calico /var/lib/containerd /var/lib/kubelet /var/lib/cni /etc/cni/net.d /etc/kubernetes /etc/containerd $HOME/.kube
+      register: reboot_required
+        
 - import_playbook: ../playbooks/reboot-playbook.yaml

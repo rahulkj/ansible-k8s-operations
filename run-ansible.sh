@@ -2,8 +2,8 @@
 
 SSH_PASS_EXISTS=$(which sshpass)
 
-USER_VARIABLES=(LINUX_VM_USER PI_VM_USER)
-PASSWORD_VARIABLES=(LINUX_VM_PASSWORD LINUX_VM_SUDO_PASSWORD PI_VM_PASSWORD PI_VM_SUDO_PASSWORD)
+USER_VARIABLES=(PI_USER VM_USER)
+PASSWORD_VARIABLES=(PI_PASSWORD PI_SUDO_PASSWORD VM_PASSWORD VM_SUDO_PASSWORD)
 
 if [[ -z $SSH_PASS_EXISTS ]]; then
     OS=$(uname)
@@ -25,6 +25,25 @@ promptUserInput() {
     export $1
     read -s -p "Enter username for $1: " $1
     echo
+}
+
+usage_instructions() {
+    echo "Usage: ./run-ansible.sh <OPTION> <SUB-OPTION>"
+    echo "  Options:"
+    echo "    k8s-bootstrap: bootstrap k8s environment"
+    echo "    k8s-destroy: destroy k8s environment"
+    echo "    k8s-upgrade: upgrade k8s environment"
+    echo "    k8s-upgrade-packages: upgrade k8s packages to the latest version"
+    echo
+    echo "  Sub-Options:"
+    echo "    pi: operate on Raspberry Pi based lab environment"
+    echo "    vm: operate on VM based lab environment"
+    echo
+    echo "  Example:"
+    echo "    ./run-ansible.sh k8s-bootstrap pi"
+    echo "    ./run-ansible.sh k8s-destroy vm"
+    echo "    ./run-ansible.sh k8s-upgrade pi"
+    echo "    ./run-ansible.sh k8s-upgrade-packages vm"
 }
 
 promptPasswordInput() {
@@ -57,51 +76,88 @@ for v in ${USER_VARIABLES[@]}; do
     fi
 done
 
+echo "----- Generate the inventory yaml file -----"
 cleanupFile
 
 if [[ -z "$1" ]]; then
-    echo "Usage: ./run-ansible.sh <OPTION>"
-    echo "k8s-bootstrap: setup k8s environment"
-    echo "k8s-destroy: reset the machines that have k8s cluster"
+    usage_instructions
     exit 1
 fi
 
-if [[ "$1" == "k8s-bootstrap" ]]; then
-    if [[ "$2" == "pi" ]]; then
-        export IP_POOL=$PI_IP_POOL
-        envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
+case $1 in
+    k8s-bootstrap)
+        case $2 in
+            pi)
+                export IP_POOL=$PI_IP_POOL
+                ;;
+            vm)
+                export IP_POOL=$VM_IP_POOL
+                ;;
+            *)
+                usage_instructions
+                exit 1
+                ;;
+        esac
 
-        echo "----- Generate the inventory yaml file -----"
+        export PLATFORM="$2"
+
+        envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
+        envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml                
         envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
+
         ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
-    elif [[ "$2" == "vm" ]]; then
-        export IP_POOL=$VMS_IP_POOL
-        envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
+        ;;
+    k8s-destroy)
+        case $2 in
+            pi|vm)
+                envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
+                ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
+                ;;
+            *)
+                usage_instructions
+                exit 1
+                ;;
+        esac
+        ;;
+    k8s-upgrade)
+        case $2 in
+            pi|vm)
+                envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
+                ansible-playbook playbooks/upgrade-k8s-playbook.yaml -i temp/inventory-updated.yaml
+                ;;
+            *)
+                usage_instructions
+                exit 1
+                ;;
+        esac
+        ;;
+    k8s-upgrade-packages)
+        case $2 in
+            pi)
+                export IP_POOL=$PI_IP_POOL
+                ;;
+            vm)
+                export IP_POOL=$VM_IP_POOL
+                ;;
+            *)
+                usage_instructions
+                exit 1
+                ;;
+        esac
 
-        echo "----- Generate the inventory yaml file -----"
-        envsubst < templates/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-        ansible-playbook config/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
-    else
-        echo "Usage: ./run-ansible.sh k8s-bootstrap <OPTION>"
-        echo "pi: bootstrap k8s environment on pi"
-        echo "vm: bootstrap k8s environment on vm"
-        exit 1
-    fi
-elif [[ "$1" == "k8s-destroy" ]]; then
-    if [[ "$2" == "pi" ]]; then
-        echo "----- Generate the inventory yaml file -----"
+        export PLATFORM="$2"
+
+        envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
+        envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml
         envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-        ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
-    elif [[ "$2" == "vm" ]]; then
-        echo "----- Generate the inventory yaml file -----"
-        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-        ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
-    else
-        echo "Usage: ./run-ansible.sh k8s-destroy <OPTION>"
-        echo "pi: destroy k8s environment on pi"
-        echo "vm: destroy k8s environment on vm"
+
+        ansible-playbook playbooks/upgrade-k8s-packages-playbook.yaml -i temp/inventory-updated.yaml
+        ;;
+    *)
+        usage_instructions
         exit 1
-    fi
-else 
-    echo "You need to read the instructions properly"
-fi
+        ;;
+esac
+;;
+
+cleanupFile

@@ -1,0 +1,15 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: $SITE_NAME
+  namespace: kube-system
+spec:
+  entryPoints:
+    - web
+  routes:
+  - match: Host(`$SITE_NAME.$PLATFORM.$DOMAIN_NAME`)
+    kind: Rule
+    services:
+    - name: $SITE_NAME
+      port: 80

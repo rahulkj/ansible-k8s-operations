@@ -6,15 +6,15 @@ if [[ $1 == "pi" ]]; then
     IFS=', ' read -r -a control_plane_hosts <<< "$PI_CONTROL_PLANE_HOSTS"
     IFS=', ' read -r -a worker_hosts <<< "$PI_WORKER_HOSTS"
     FILE="config/pi-k8s-inventory.yaml"
-elif [[ $1 == "vms" ]]; then
+elif [[ $1 == "vm" ]]; then
     IFS=', ' read -r -a control_plane_hosts <<< "$VM_CONTROL_PLANE_HOSTS"
     IFS=', ' read -r -a worker_hosts <<< "$VM_WORKER_HOSTS"
-    FILE="config/vms-k8s-inventory.yaml"
+    FILE="config/vm-k8s-inventory.yaml"
 else
-    echo "invalid option, the only support options are pi/vms"
+    echo "invalid option, the only support options are pi/vm"
     echo "./generate-k8s-inventory.sh <OPTION>"
     echo "pi: generate the inventory for raspberry pi's"
-    echo "vms: generate the inventory for vms"
+    echo "vm: generate the inventory for vm"
     exit 1
 fi
 
@@ -44,7 +44,7 @@ for host in ${control_plane_hosts[@]}; do
             .control_plane.hosts.$host.ansible_become=\"yes\" | \
             .control_plane.hosts.$host.ansible_become_method=\"sudo\" | \
             .control_plane.hosts.$host.ansible_become_password=\"\$PI_SUDO_PASSWORD\")"
-    elif [[ $1 == "vms" ]]; then
+    elif [[ $1 == "vm" ]]; then
         all_str+="(.all.hosts.$host.ansible_host=\"$host\" | \
             .all.hosts.$host.ansible_user=\"\$VM_USER\" | \
             .all.hosts.$host.ansible_ssh_pass=\"\$VM_PASSWORD\" | \
@@ -82,7 +82,7 @@ for host in ${worker_hosts[@]}; do
             .worker_str.hosts.$host.ansible_become=\"yes\" | \
             .worker_str.hosts.$host.ansible_become_method=\"sudo\" | \
             .worker_str.hosts.$host.ansible_become_password=\"\$PI_SUDO_PASSWORD\")"
-    elif [[ $1 == "vms" ]]; then
+    elif [[ $1 == "vm" ]]; then
         all_str+="(.all.hosts.$host.ansible_host=\"$host\" | \
             .all.hosts.$host.ansible_user=\"\$VM_USER\" | \
             .all.hosts.$host.ansible_ssh_pass=\"\$VM_PASSWORD\" | \

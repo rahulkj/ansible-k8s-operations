@@ -1,0 +1,75 @@
+- import_playbook: ../playbooks/apt-update-playbook.yaml
+
+- name: Update kubernetes distro
+  hosts: all
+  tasks:
+    - name: Upgrade kubernetes distro
+      become: true
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg --yes
+        sudo rm /etc/apt/sources.list.d/kubernetes.list
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Apt Update
+      ansible.builtin.apt:
+        name: "*"
+        state: latest
+
+- hosts: control_plane
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Upgrade kubeadm
+      shell: |
+        sudo apt-mark unhold kubeadm
+        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
+        sudo apt-get install -y kubeadm
+        sudo apt-mark hold kubeadm
+        sudo kubeadm upgrade node
+
+    - name: Pull latest images
+      shell: |
+        sudo kubeadm config images pull
+
+    - name: Upgrade control plane
+      shell: |
+        sudo kubeadm upgrade apply {{k8s.minor_version}} -f -y
+
+    - name: Upgrade kubelet and kubectl
+      shell: |
+        sudo apt-mark unhold kubelet kubectl
+        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
+        sudo apt-get install -y kubelet kubectl
+        sudo apt-mark hold kubelet kubectl
+
+    - name: Restart the kubelet
+      shell: |
+        sudo systemctl daemon-reload
+        sudo systemctl restart kubelet
+
+- hosts: worker_nodes
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Upgrade kubeadm
+      shell: |
+        sudo apt-mark unhold kubeadm
+        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
+        sudo apt-get install -y kubeadm
+        sudo apt-mark hold kubeadm
+        sudo kubeadm upgrade node
+
+    - name: Upgrade kubelet and kubectl
+      shell: |
+        sudo apt-mark unhold kubelet kubectl
+        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
+        sudo apt-get install -y kubelet kubectl
+        sudo apt-mark hold kubelet kubectl
+
+    - name: Restart the kubelet
+      shell: |
+        sudo systemctl daemon-reload
+        sudo systemctl restart kubelet
+
+- import_playbook: ../playbooks/reboot-playbook.yaml

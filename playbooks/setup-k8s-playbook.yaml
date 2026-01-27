@@ -7,11 +7,13 @@
       ansible.builtin.stat:
         path: /etc/modules-load.d/containerd.conf
       register: containerd_conf_result
+
     - name: Create containerd config file
       file:
         path: "/etc/modules-load.d/containerd.conf"
         state: "touch"
       when: not containerd_conf_result.stat.exists
+
     - name: Add conf for containerd
       blockinfile:
         path: "/etc/modules-load.d/containerd.conf"
@@ -19,19 +21,23 @@
           overlay
           br_netfilter
       when: not containerd_conf_result.stat.exists
+
     - name: modprobe
       shell: |
         sudo modprobe overlay
         sudo modprobe br_netfilter
+
     - name: Check that the 99-kubernetes-cri.conf exists
       ansible.builtin.stat:
         path: /etc/sysctl.d/99-kubernetes-cri.conf
       register: kubernetes_cri_conf_result
+
     - name: Set system configurations for Kubernetes networking
       file:
         path: "/etc/sysctl.d/99-kubernetes-cri.conf"
         state: "touch"
       when: not kubernetes_cri_conf_result.stat.exists
+
     - name: Add conf for containerd
       blockinfile:
         path: "/etc/sysctl.d/99-kubernetes-cri.conf"
@@ -40,12 +46,35 @@
           net.ipv4.ip_forward = 1
           net.bridge.bridge-nf-call-ip6tables = 1
       when: not kubernetes_cri_conf_result.stat.exists
+
+    - name: Check that the 99-disable-ipv6.conf exists
+      ansible.builtin.stat:
+        path: /etc/sysctl.d/99-disable-ipv6.conf
+      register: ipv6_disable_conf_result
+
+    - name: Set system configurations to disable ipv6
+      file:
+        path: "/etc/sysctl.d/99-disable-ipv6.conf"
+        state: "touch"
+      when: not ipv6_disable_conf_result.stat.exists
+
+    - name: Add conf for containerd
+      blockinfile:
+        path: "/etc/sysctl.d/99-disable-ipv6.conf"
+        block: |
+          net.ipv6.conf.all.disable_ipv6 = 1
+          net.ipv6.conf.default.disable_ipv6 = 1
+          net.ipv6.conf.lo.disable_ipv6 = 1
+      when: not ipv6_disable_conf_result.stat.exists
+
     - name: Apply new settings
       command: sudo sysctl --system
+
     - name: Disable swap
       shell: |
         sudo swapoff -a
         sudo sed -i '/swap/ s/^\(.*\)$/#\1/g' /etc/fstab
+
     - name: Enable cgroups
       shell: |
         ## Ubuntu 24.04 on rpi
@@ -71,6 +100,7 @@
           fi
         fi
       register: cgroups_enabled_result
+
     - name: install containerd network plugins and configure cgroups
       shell: |
         sudo apt-get update && sudo apt-get install -y containerd containernetworking-plugins
@@ -102,15 +132,18 @@
         fi
 
         sudo systemctl restart containerd
+
     - name: Check that the crictl.yaml exists
       ansible.builtin.stat:
         path: /etc/crictl.yaml
       register: crictl_result
+
     - name: Set system configurations for Kubernetes networking
       file:
         path: "/etc/crictl.yaml"
         state: "touch"
       when: not crictl_result.stat.exists
+
     - name: Add conf for crictl
       blockinfile:
         path: "/etc/crictl.yaml"
@@ -120,30 +153,36 @@
           timeout: 2
           debug: true
           pull-image-on-create: false
+
     - name: Check that the kubernetes keyring file exists
       ansible.builtin.stat:
         path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
       register: kubernetes_keyring_result
+
     - name: install and configure dependencies
       shell: |
         sudo apt-get update && sudo apt-get install -y apt-transport-https curl ipvsadm
         curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
         sudo chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
       when: not kubernetes_keyring_result.stat.exists
+
     - name: Check that the kubernetes repo file exists
       ansible.builtin.stat:
         path: /etc/apt/sources.list.d/kubernetes.list
       register: kubernetes_repo_conf_result
+
     - name: Create kubernetes repo file
       file:
         path: "/etc/apt/sources.list.d/kubernetes.list"
         state: "touch"
       when: not kubernetes_repo_conf_result.stat.exists
+
     - name: Add K8s Source
       blockinfile:
         path: "/etc/apt/sources.list.d/kubernetes.list"
         block: |
           deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/ /
+
     - name: install kubernetes packages
       shell: |
         sudo apt-get update
@@ -151,10 +190,12 @@
         sudo apt-get purge -y kubelet kubeadm kubectl
         sudo apt-get install -y kubelet kubeadm kubectl
         sudo apt-mark hold kubelet kubeadm kubectl
+
     - name: install nfs-common packages
       shell: |
         sudo apt-get update
         sudo apt-get install -y nfs-common
+      register: reboot_required
 
 - import_playbook: ../playbooks/reboot-playbook.yaml
 
@@ -169,6 +210,7 @@
       args:
         chdir: $HOME
         creates: cluster_initialized.txt
+
     - name: Install Pod network
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
@@ -177,15 +219,18 @@
         curl https://raw.githubusercontent.com/projectcalico/calico/$VERSION/manifests/canal.yaml -O
         kubectl apply -f canal.yaml
         rm canal.yaml
+
     - name: Get the token for joining the worker nodes
       become_user: root
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
         kubeadm token create --print-join-command
       register: kubernetes_join_command
+
     - name: Join Command Output
       debug:
         msg: "{{ kubernetes_join_command.stdout }}"
+
     - name: Copy join command to local file.
       local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="/tmp/kubernetes_join_command" mode=0777
 
@@ -199,6 +244,7 @@
         src: /tmp/kubernetes_join_command
         dest: /tmp/kubernetes_join_command
         mode: 0777
+
     - name: Join the Worker nodes to the cluster.
       command: sh /tmp/kubernetes_join_command
       register: joined_or_not
@@ -218,17 +264,21 @@
         kubectl apply -f metallb-native-$VERSION.yaml
         kubectl -n metallb-system rollout status deployment/controller --watch=true
         rm metallb-native-$VERSION.yaml
+
     - name: Copy metallb config file
       copy:
         src: ../temp/metal-lb-config.yaml
         dest: /tmp/metal-lb-config.yaml
+
     - name: Apply metallb config file
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl apply -f /tmp/metal-lb-config.yaml
+
     - name: Install helm cli
       become_user: root
       shell: snap install helm --classic
+
     - name: Create NFS storage class
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
@@ -241,26 +291,7 @@
         --set nfs.path={{ lookup('ansible.builtin.env', 'NFS_MOUNT') }} \
         --set storageClass.name=nfs-storage \
         --set storageClass.defaultClass=true
-    - name: Install kubernetes repository
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/
-    - name: Install kubernetes dashboard
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
-    - name: Change kubernetes dashboard service from ClusterIP to Loadbalancer
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        kubectl patch svc -n kubernetes-dashboard kubernetes-dashboard-kong-proxy --type='json' -p '[{"op":"replace","path":"/spec/type","value":"LoadBalancer"}]'
-    - name: Copy manifest to create admin user for accessing kubernetes dashboard
-      copy:
-        src: ../templates/kubernetes-dashboard-user.yaml
-        dest: /tmp/kubernetes-dashboard-user.yaml
-    - name: Create admin user for accessing kubernetes dashboard
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        kubectl apply -f /tmp/kubernetes-dashboard-user.yaml
+
     - name: Join Command Output
       debug:
         msg: 
@@ -268,3 +299,38 @@
         - "mkdir -p $HOME/.kube"
         - "sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config"
         - "sudo chown $(id -u):$(id -g) $HOME/.kube/config"
+
+    - name: Copy traefik values file
+      copy:
+        src: ../templates/traefik-values.yaml
+        dest: /tmp/traefik-values.yaml
+
+    - name: Install traefik ingress controller
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        helm upgrade --install traefik traefik/traefik \
+          --create-namespace --namespace traefik \
+          -f /tmp/traefik-values.yaml
+
+    - name: Install headlamp dashboard
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml
+
+    - name: Copy headlamp ingress file
+      copy:
+        src: ../temp/headlamp-ingress.yaml
+        dest: /tmp/headlamp-ingress.yaml
+
+    - name: Expose headlamp dashboard via ingress
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /tmp/headlamp-ingress.yaml
+
+    - name: Create service account user and assign permissions for accessing headlamp dashboard
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl -n kube-system create serviceaccount headlamp-admin
+        kubectl create clusterrolebinding headlamp-admin \
+          --serviceaccount=kube-system:headlamp-admin \
+          --clusterrole=cluster-admin
