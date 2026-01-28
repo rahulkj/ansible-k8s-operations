@@ -58,7 +58,7 @@
         state: "touch"
       when: not ipv6_disable_conf_result.stat.exists
 
-    - name: Add conf for containerd
+    - name: Disable IPv6 in the system
       blockinfile:
         path: "/etc/sysctl.d/99-disable-ipv6.conf"
         block: |
@@ -101,35 +101,18 @@
         fi
       register: cgroups_enabled_result
 
+- import_playbook: ../playbooks/reboot-playbook.yaml
+
+- name: Install common packages on the hosts
+  hosts: all
+  tasks:
     - name: install containerd network plugins and configure cgroups
       shell: |
-        sudo apt-get update && sudo apt-get install -y containerd containernetworking-plugins
+        sudo apt-get install -y containerd containernetworking-plugins
+        
         sudo mkdir -p /etc/containerd
+        
         containerd config default | sed "s/ShimCgroup = ''/ShimCgroup = ''\n            SystemdCgroup = true/" | sudo tee /etc/containerd/config.toml
-        sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-
-        if grep -q '^\[plugins."io.containerd.grpc.v1.cri".registry\]' /etc/containerd/config.toml; then
-          # Insert Harbor config after the registry section
-          sudo sed -i '/^\  [plugins."io.containerd.grpc.v1.cri".registry\]/a\
-            [plugins."io.containerd.grpc.v1.cri".registry.mirrors]\
-              [plugins."io.containerd.grpc.v1.cri".registry.mirrors."harbor.lab.int"]\
-                endpoint = ["https://harbor.lab.int"]\
-            [plugins."io.containerd.grpc.v1.cri".registry.configs]\
-              [plugins."io.containerd.grpc.v1.cri".registry.configs."harbor.lab.int".tls]\
-                insecure_skip_verify = true\
-        ' /etc/containerd/config.toml
-        else
-          # Insert a new registry block after the [plugins] header
-          sudo sed -i '/^\[plugins\]/a\
-          [plugins."io.containerd.grpc.v1.cri".registry]\
-            [plugins."io.containerd.grpc.v1.cri".registry.mirrors]\
-              [plugins."io.containerd.grpc.v1.cri".registry.mirrors."harbor.lab.int"]\
-                endpoint = ["https://harbor.lab.int"]\
-            [plugins."io.containerd.grpc.v1.cri".registry.configs]\
-              [plugins."io.containerd.grpc.v1.cri".registry.configs."harbor.lab.int".tls]\
-                insecure_skip_verify = true\
-        ' /etc/containerd/config.toml
-        fi
 
         sudo systemctl restart containerd
 

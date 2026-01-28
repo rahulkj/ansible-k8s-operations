@@ -5,5 +5,4 @@
   tasks:
     - name: System Reboot
       ansible.builtin.reboot:
-      when:
-        - reboot_required.changed
+        reboot_timeout: 600
