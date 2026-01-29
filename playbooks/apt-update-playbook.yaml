@@ -1,5 +1,6 @@
 - name: Update apt-packages on linux vms
   hosts: all
+  any_errors_fatal: true
   gather_facts: false
 
   tasks:

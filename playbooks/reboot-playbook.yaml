@@ -1,4 +1,4 @@
-- name: Reboot systems if apt-updates were applied
+- name: Reboot systems if reboot_required result is true
   hosts: all
   gather_facts: false
 
@@ -6,3 +6,5 @@
     - name: System Reboot
       ansible.builtin.reboot:
         reboot_timeout: 600
+      when: 
+        - reboot_required.changed

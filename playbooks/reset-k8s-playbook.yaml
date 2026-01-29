@@ -2,6 +2,7 @@
 
 - name: Update apt-packages on linux vms
   hosts: all
+  any_errors_fatal: true
   tasks:
     - name: Perform reset
       become_user: root
@@ -22,5 +23,9 @@
       shell: |
         rm -rf /var/lib/calico /var/lib/containerd /var/lib/kubelet /var/lib/cni /etc/cni/net.d /etc/kubernetes /etc/containerd $HOME/.kube
       register: reboot_required
+
+    - name: Set reboot required fact
+      set_fact:
+        reboot_required: "{{ reboot_required }}"
         
 - import_playbook: ../playbooks/reboot-playbook.yaml

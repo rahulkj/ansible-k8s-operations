@@ -18,6 +18,7 @@
 - hosts: control_plane
   become: true
   gather_facts: true
+  any_errors_fatal: true
   tasks:
     - name: Upgrade kubeadm
       shell: |
@@ -50,6 +51,7 @@
 - hosts: worker_nodes
   become: true
   gather_facts: true
+  any_errors_fatal: true
 
   tasks:
     - name: Upgrade kubeadm
@@ -71,5 +73,10 @@
       shell: |
         sudo systemctl daemon-reload
         sudo systemctl restart kubelet
+      register: reboot_required
+
+    - name: Export reboot_required fact
+      set_fact:
+        reboot_required: "{{ reboot_required }}"
 
 - import_playbook: ../playbooks/reboot-playbook.yaml

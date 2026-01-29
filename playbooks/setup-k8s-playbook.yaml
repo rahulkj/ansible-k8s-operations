@@ -2,19 +2,20 @@
 
 - name: Install common packages on the hosts
   hosts: all
+  any_errors_fatal: true
   tasks:
-    - name: Check that the containerd.conf exists
+    - name: Configure sysctl and kernel modules for kubernetes
       ansible.builtin.stat:
         path: /etc/modules-load.d/containerd.conf
       register: containerd_conf_result
 
-    - name: Create containerd config file
+    - name: Set containerd kernel modules load file
       file:
         path: "/etc/modules-load.d/containerd.conf"
         state: "touch"
       when: not containerd_conf_result.stat.exists
 
-    - name: Add conf for containerd
+    - name: Add containerd kernel modules
       blockinfile:
         path: "/etc/modules-load.d/containerd.conf"
         block: |
@@ -22,7 +23,7 @@
           br_netfilter
       when: not containerd_conf_result.stat.exists
 
-    - name: modprobe
+    - name: Load necessary kernel modules
       shell: |
         sudo modprobe overlay
         sudo modprobe br_netfilter
@@ -38,7 +39,7 @@
         state: "touch"
       when: not kubernetes_cri_conf_result.stat.exists
 
-    - name: Add conf for containerd
+    - name: Add sysctl conf for kubernetes networking
       blockinfile:
         path: "/etc/sysctl.d/99-kubernetes-cri.conf"
         block: |
@@ -52,13 +53,13 @@
         path: /etc/sysctl.d/99-disable-ipv6.conf
       register: ipv6_disable_conf_result
 
-    - name: Set system configurations to disable ipv6
+    - name: Set system configurations to disable IPv6
       file:
         path: "/etc/sysctl.d/99-disable-ipv6.conf"
         state: "touch"
       when: not ipv6_disable_conf_result.stat.exists
 
-    - name: Disable IPv6 in the system
+    - name: Add sysctl conf to disable IPv6
       blockinfile:
         path: "/etc/sysctl.d/99-disable-ipv6.conf"
         block: |
@@ -67,15 +68,26 @@
           net.ipv6.conf.lo.disable_ipv6 = 1
       when: not ipv6_disable_conf_result.stat.exists
 
-    - name: Apply new settings
-      command: sudo sysctl --system
+    - name: Apply sysctl settings
+      shell: |
+        sudo sysctl --system
 
-    - name: Disable swap
+    - name: Disable swap on the hosts
       shell: |
         sudo swapoff -a
         sudo sed -i '/swap/ s/^\(.*\)$/#\1/g' /etc/fstab
 
-    - name: Enable cgroups
+    - name: Enable cgroups in ubuntu on rpi
+      shell: |
+        if [ -f /boot/cmdline.txt ]; then
+          FOUND=$(cat /boot/cmdline.txt | grep "cgroup")
+          if [ -z $FOUND ]; then
+            sudo sed -i 's/$/ cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1/' /boot/cmdline.txt
+          fi
+        fi
+      register: cgroups_enabled
+    
+    - name: Enable cgroups in 24.04 ubuntu on rpi
       shell: |
         ## Ubuntu 24.04 on rpi
         if [ -f /boot/firmware/cmdline.txt ]; then
@@ -84,14 +96,10 @@
             sudo sed -i 's/$/ cgroup_enable=memory cgroup_memory=1/' /boot/firmware/cmdline.txt
           fi
         fi
+      register: cgroups_enabled
 
-        if [ -f /boot/cmdline.txt ]; then
-          FOUND=$(cat /boot/cmdline.txt | grep "cgroup")
-          if [ -z $FOUND ]; then
-            sudo sed -i 's/$/ cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1/' /boot/cmdline.txt
-          fi
-        fi
-
+    - name: Enable cgroups in 25.10 ubuntu on rpi
+      shell: |
         ## Ubuntu 25.10 on rpi
         if [ -f /boot/firmware/current/cmdline.txt ]; then
           FOUND=$(cat /boot/firmware/current/cmdline.txt | grep "cgroup")
@@ -99,12 +107,17 @@
             sudo sed -i 's/$/ cgroup_enable=memory cgroup_memory=1/' /boot/firmware/current/cmdline.txt
           fi
         fi
-      register: cgroups_enabled_result
+      register: cgroups_enabled
+
+    - name: Export reboot_required fact
+      set_fact:
+        reboot_required: "{{ cgroups_enabled }}"
 
 - import_playbook: ../playbooks/reboot-playbook.yaml
 
-- name: Install common packages on the hosts
+- name: Install containerd and kubernetes packages
   hosts: all
+  any_errors_fatal: true
   tasks:
     - name: install containerd network plugins and configure cgroups
       shell: |
@@ -180,11 +193,16 @@
         sudo apt-get install -y nfs-common
       register: reboot_required
 
+    - name: Export reboot_required fact
+      set_fact:
+        reboot_required: "{{ reboot_required }}"
+
 - import_playbook: ../playbooks/reboot-playbook.yaml
 
 - hosts: control_plane
+  any_errors_fatal: true
   tasks:
-    - name: initialize the cluster
+    - name: Initialize the Kubernetes Cluster
       become_user: root
       shell: |
         TOKEN=$(kubeadm token generate)
@@ -194,7 +212,7 @@
         chdir: $HOME
         creates: cluster_initialized.txt
 
-    - name: Install Pod network
+    - name: Install Pod network - Canal
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
         VERSION=$(curl https://api.github.com/repos/projectcalico/calico/releases | jq -r '.[0] | .tag_name')
@@ -203,7 +221,7 @@
         kubectl apply -f canal.yaml
         rm canal.yaml
 
-    - name: Get the token for joining the worker nodes
+    - name: Generate the join command for worker nodes
       become_user: root
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
@@ -222,7 +240,7 @@
   gather_facts: true
 
   tasks:
-    - name: Copy join command from Ansiblehost to the worker nodes.
+    - name: Copy join command from control plane to worker nodes.
       copy:
         src: /tmp/kubernetes_join_command
         dest: /tmp/kubernetes_join_command
@@ -230,17 +248,15 @@
 
     - name: Join the Worker nodes to the cluster.
       command: sh /tmp/kubernetes_join_command
-      register: joined_or_not
 
 - hosts: control_plane
+  any_errors_fatal: true
   tasks:
     - name: Install Loadbalancer
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
 
-        kubectl get configmap kube-proxy -n kube-system -o yaml | \
-        sed -e "s/strictARP: false/strictARP: true/" | \
-        kubectl apply -f - -n kube-system
+        kubectl get configmap kube-proxy -n kube-system -o yaml | sed -e "s/strictARP: false/strictARP: true/" | kubectl apply -f - -n kube-system
 
         VERSION=$(curl https://api.github.com/repos/metallb/metallb/releases | jq -r '.[0] | .tag_name')
         wget https://raw.githubusercontent.com/metallb/metallb/$VERSION/config/manifests/metallb-native.yaml -O metallb-native-$VERSION.yaml
@@ -275,14 +291,6 @@
         --set storageClass.name=nfs-storage \
         --set storageClass.defaultClass=true
 
-    - name: Join Command Output
-      debug:
-        msg: 
-        - "SSH to the host, and run the commands"
-        - "mkdir -p $HOME/.kube"
-        - "sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config"
-        - "sudo chown $(id -u):$(id -g) $HOME/.kube/config"
-
     - name: Copy traefik values file
       copy:
         src: ../templates/traefik-values.yaml
@@ -291,6 +299,8 @@
     - name: Install traefik ingress controller
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
+
+        helm repo add traefik https://traefik.github.io/charts
         helm upgrade --install traefik traefik/traefik \
           --create-namespace --namespace traefik \
           -f /tmp/traefik-values.yaml
@@ -317,3 +327,11 @@
         kubectl create clusterrolebinding headlamp-admin \
           --serviceaccount=kube-system:headlamp-admin \
           --clusterrole=cluster-admin
+    
+    - name: Join Command Output
+      debug:
+        msg: 
+        - "SSH to the host, and run the commands"
+        - "mkdir -p $HOME/.kube"
+        - "sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config"
+        - "sudo chown $(id -u):$(id -g) $HOME/.kube/config"
