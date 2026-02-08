@@ -1,21 +1,25 @@
-- name: Update apt-packages on linux vms
+---
+- name: Update and upgrade apt packages
   hosts: all
-  any_errors_fatal: true
-  gather_facts: false
+  become: true
+  gather_facts: true
 
   tasks:
-    - name: Ping the hosts
-      ansible.builtin.ping:
-
-    - name: Update Apt Cache
+    - name: Update apt cache
       ansible.builtin.apt:
-        update_cache: true
+        update_cache: yes
+        cache_valid_time: 3600
 
-    - name: Upgrade all packages
+    - name: Perform dist upgrade
       ansible.builtin.apt:
         upgrade: dist
+      register: apt_upgrade_result
 
-    - name: Autoremove unnecessary packages
-      ansible.builtin.apt:
-        autoremove: yes
-        autoclean: yes
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Accumulate reboot requirement (apt)
+      ansible.builtin.set_fact:
+        reboot_required: "{{ reboot_required | default(false) or reboot_flag.stat.exists }}"

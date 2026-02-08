@@ -1,31 +1,175 @@
-- import_playbook: ../playbooks/apt-update-playbook.yaml
-
-- name: Update apt-packages on linux vms
+---
+- name: Destroy Kubernetes cluster and clean all nodes
   hosts: all
+  become: true
   any_errors_fatal: true
+  serial: 1   # avoid nuking all nodes at once
+
+  vars:
+    k8s_packages:
+      - kubelet
+      - kubeadm
+      - kubectl
+
+    container_packages:
+      - containerd
+      - containernetworking-plugins
+
+    base_packages:
+      - nfs-common
+      - ipvsadm
+      - net-tools
+
   tasks:
-    - name: Perform reset
-      become_user: root
-      shell: |
-        kubeadm reset -f
-      register: reboot_required
+    # --------------------------------------------------
+    # Pre-flight: stop services if present
+    # --------------------------------------------------
+    - name: Stop kubelet if running
+      ansible.builtin.systemd:
+        name: kubelet
+        state: stopped
+        enabled: false
+      ignore_errors: true
 
-    - name: Remove all the pods, containers, images
-      become_user: root
-      shell: |
-        crictl rmp -a -f
-        crictl rm -a -f
-        crictl rmi -a
-      register: reboot_required
+    - name: Stop containerd if running
+      ansible.builtin.systemd:
+        name: containerd
+        state: stopped
+        enabled: false
+      ignore_errors: true
 
-    - name: Delete directories
-      become_user: root
-      shell: |
-        rm -rf /var/lib/calico /var/lib/containerd /var/lib/kubelet /var/lib/cni /etc/cni/net.d /etc/kubernetes /etc/containerd $HOME/.kube
-      register: reboot_required
+    # --------------------------------------------------
+    # Reset kubeadm (safe even if not initialized)
+    # --------------------------------------------------
+    - name: Reset kubeadm
+      ansible.builtin.command: kubeadm reset -f
+      ignore_errors: true
 
-    - name: Set reboot required fact
-      set_fact:
-        reboot_required: "{{ reboot_required }}"
-        
-- import_playbook: ../playbooks/reboot-playbook.yaml
+    # --------------------------------------------------
+    # Remove Kubernetes manifests and state
+    # --------------------------------------------------
+    - name: Remove Kubernetes directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+        - /var/lib/cni
+        - /etc/cni
+        - /opt/cni
+        - /run/flannel
+        - /run/containerd
+        - /var/run/kubernetes
+
+    # --------------------------------------------------
+    # Flush iptables & IPVS (critical)
+    # --------------------------------------------------
+    - name: Flush iptables
+      ansible.builtin.shell: |
+        iptables -F
+        iptables -t nat -F
+        iptables -t mangle -F
+        iptables -X
+      changed_when: false
+
+    - name: Reset IPVS tables
+      ansible.builtin.command: ipvsadm --clear
+      ignore_errors: true
+
+    # --------------------------------------------------
+    # Delete all container images & containers
+    # --------------------------------------------------
+    - name: Start containerd temporarily (for cleanup)
+      ansible.builtin.systemd:
+        name: containerd
+        state: started
+      ignore_errors: true
+
+    - name: Delete all containers (crictl)
+      ansible.builtin.shell: |
+        crictl ps -aq | xargs -r crictl rm -f
+      ignore_errors: true
+      changed_when: false
+
+    - name: Delete all images (crictl)
+      ansible.builtin.shell: |
+        crictl images -q | xargs -r crictl rmi
+      ignore_errors: true
+      changed_when: false
+
+    - name: Stop containerd after cleanup
+      ansible.builtin.systemd:
+        name: containerd
+        state: stopped
+      ignore_errors: true
+
+    # --------------------------------------------------
+    # Remove packages
+    # --------------------------------------------------
+    - name: Unhold Kubernetes packages
+      ansible.builtin.command: apt-mark unhold kubelet kubeadm kubectl
+      changed_when: false
+      ignore_errors: true
+
+    - name: Purge Kubernetes packages
+      ansible.builtin.apt:
+        name: "{{ k8s_packages }}"
+        state: absent
+        purge: yes
+        autoremove: yes
+
+    - name: Purge container runtime packages
+      ansible.builtin.apt:
+        name: "{{ container_packages }}"
+        state: absent
+        purge: yes
+        autoremove: yes
+
+    - name: Remove base packages
+      ansible.builtin.apt:
+        name: "{{ base_packages }}"
+        state: absent
+        purge: yes
+        autoremove: yes
+
+    # --------------------------------------------------
+    # Remove apt repos & keys
+    # --------------------------------------------------
+    - name: Remove Kubernetes apt repo
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        state: absent
+
+    - name: Remove Kubernetes apt keyring
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        state: absent
+
+    # --------------------------------------------------
+    # Final cleanup
+    # --------------------------------------------------
+    - name: Remove containerd config
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: absent
+
+    - name: Remove crictl config
+      ansible.builtin.file:
+        path: /etc/crictl.yaml
+        state: absent
+
+    # --------------------------------------------------
+    # Detect reboot requirement
+    # --------------------------------------------------
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Mark reboot required
+      ansible.builtin.set_fact:
+        reboot_required: "{{ reboot_flag.stat.exists }}"
+
+- import_playbook: reboot-playbook.yaml

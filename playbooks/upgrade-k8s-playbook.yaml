@@ -1,82 +1,180 @@
+# --------------------------------------------------
+# Base OS updates
+# --------------------------------------------------
 - import_playbook: ../playbooks/apt-update-playbook.yaml
 
-- name: Update kubernetes distro
+# --------------------------------------------------
+# Kubernetes APT repository
+# --------------------------------------------------
+- name: Ensure Kubernetes APT repository
   hosts: all
-  tasks:
-    - name: Upgrade kubernetes distro
-      become: true
-      shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg --yes
-        sudo rm /etc/apt/sources.list.d/kubernetes.list
-        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-
-    - name: Apt Update
-      ansible.builtin.apt:
-        name: "*"
-        state: latest
-
-- hosts: control_plane
   become: true
-  gather_facts: true
-  any_errors_fatal: true
-  tasks:
-    - name: Upgrade kubeadm
-      shell: |
-        sudo apt-mark unhold kubeadm
-        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
-        sudo apt-get install -y kubeadm
-        sudo apt-mark hold kubeadm
-        sudo kubeadm upgrade node
+  gather_facts: false
 
-    - name: Pull latest images
+  tasks:
+    - name: Ensure apt keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Install Kubernetes signing key
       shell: |
-        sudo kubeadm config images pull
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/Release.key \
+        | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Configure Kubernetes repository
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        mode: "0644"
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/ /
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+# --------------------------------------------------
+# Control Plane Upgrade
+# --------------------------------------------------
+- name: Upgrade Kubernetes control plane (if required)
+  hosts: control_plane
+  become: true
+  any_errors_fatal: true
+
+  tasks:
+    - name: Detect installed Kubernetes version
+      command: kubeadm version -o short
+      register: installed_k8s
+      changed_when: false
+
+    - name: Normalize installed Kubernetes version
+      set_fact:
+        installed_k8s_version: "{{ installed_k8s.stdout | regex_replace('^v', '') }}"
+
+    - name: Normalize target Kubernetes version
+      set_fact:
+        target_k8s_version: "{{ k8s.minor_version | regex_replace('^v', '') }}"
+
+    - name: Determine if upgrade is required
+      set_fact:
+        upgrade_required: "{{ installed_k8s_version != target_k8s_version }}"
+
+    - name: Show upgrade decision
+      debug:
+        msg: >
+          Installed={{ installed_k8s_version }},
+          Target={{ target_k8s_version }},
+          UpgradeRequired={{ upgrade_required }}
+
+    - name: Upgrade kubeadm
+      when: upgrade_required
+      shell: |
+        apt-mark unhold kubeadm
+        apt-get update
+        apt-get install -y kubeadm
+        apt-mark hold kubeadm
+        kubeadm upgrade node
+
+    - name: Pull Kubernetes images
+      when: upgrade_required
+      command: kubeadm config images pull
 
     - name: Upgrade control plane
-      shell: |
-        sudo kubeadm upgrade apply {{k8s.minor_version}} -f -y
+      when: upgrade_required
+      command: kubeadm upgrade apply {{ k8s.minor_version }} -f -y
 
     - name: Upgrade kubelet and kubectl
+      when: upgrade_required
       shell: |
-        sudo apt-mark unhold kubelet kubectl
-        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
-        sudo apt-get install -y kubelet kubectl
-        sudo apt-mark hold kubelet kubectl
+        apt-mark unhold kubelet kubectl
+        apt-get install -y kubelet kubectl
+        apt-mark hold kubelet kubectl
 
-    - name: Restart the kubelet
-      shell: |
-        sudo systemctl daemon-reload
-        sudo systemctl restart kubelet
+    - name: Restart kubelet
+      when: upgrade_required
+      systemd:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
 
-- hosts: worker_nodes
+# --------------------------------------------------
+# Worker Nodes Upgrade (Zero Downtime)
+# --------------------------------------------------
+- name: Upgrade Kubernetes worker nodes (if required)
+  hosts: worker_nodes
   become: true
-  gather_facts: true
   any_errors_fatal: true
+  serial: 1
 
   tasks:
-    - name: Upgrade kubeadm
+    - name: Detect installed Kubernetes version
+      command: kubeadm version -o short
+      register: installed_k8s
+      changed_when: false
+
+    - name: Normalize installed Kubernetes version
+      set_fact:
+        installed_k8s_version: "{{ installed_k8s.stdout | regex_replace('^v', '') }}"
+
+    - name: Normalize target Kubernetes version
+      set_fact:
+        target_k8s_version: "{{ k8s.minor_version | regex_replace('^v', '') }}"
+
+    - name: Determine if upgrade is required
+      set_fact:
+        upgrade_required: "{{ installed_k8s_version != target_k8s_version }}"
+
+    - name: Show upgrade decision
+      debug:
+        msg: >
+          Installed={{ installed_k8s_version }},
+          Target={{ target_k8s_version }},
+          UpgradeRequired={{ upgrade_required }}
+
+    - name: Drain node
+      when: upgrade_required
       shell: |
-        sudo apt-mark unhold kubeadm
-        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
-        sudo apt-get install -y kubeadm
-        sudo apt-mark hold kubeadm
-        sudo kubeadm upgrade node
+        kubectl drain {{ inventory_hostname }} \
+          --ignore-daemonsets \
+          --delete-emptydir-data
+      delegate_to: localhost
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Upgrade kubeadm
+      when: upgrade_required
+      shell: |
+        apt-mark unhold kubeadm
+        apt-get update
+        apt-get install -y kubeadm
+        apt-mark hold kubeadm
+        kubeadm upgrade node
 
     - name: Upgrade kubelet and kubectl
+      when: upgrade_required
       shell: |
-        sudo apt-mark unhold kubelet kubectl
-        sudo apt-get update && sudo apt-get upgrade -y && sudo apt autoremove -y
-        sudo apt-get install -y kubelet kubectl
-        sudo apt-mark hold kubelet kubectl
+        apt-mark unhold kubelet kubectl
+        apt-get install -y kubelet kubectl
+        apt-mark hold kubelet kubectl
 
-    - name: Restart the kubelet
-      shell: |
-        sudo systemctl daemon-reload
-        sudo systemctl restart kubelet
-      register: reboot_required
+    - name: Restart kubelet
+      when: upgrade_required
+      systemd:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
 
-    - name: Export reboot_required fact
-      set_fact:
-        reboot_required: "{{ reboot_required }}"
+    - name: Uncordon node
+      when: upgrade_required
+      shell: kubectl uncordon {{ inventory_hostname }}
+      delegate_to: localhost
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
+# --------------------------------------------------
+# Reboot if required
+# --------------------------------------------------
 - import_playbook: ../playbooks/reboot-playbook.yaml

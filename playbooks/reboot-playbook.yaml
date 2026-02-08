@@ -1,10 +1,18 @@
-- name: Reboot systems if reboot_required result is true
+---
+- name: Reboot hosts if required
   hosts: all
-  gather_facts: false
+  become: true
+  serial: 1
 
   tasks:
-    - name: System Reboot
+    - name: Reboot the machine
       ansible.builtin.reboot:
-        reboot_timeout: 600
-      when: 
-        - reboot_required.changed
+        msg: "Reboot initiated by Ansible due to system changes"
+        reboot_timeout: 900
+        test_command: uptime
+      when: reboot_required | default(false)
+
+    - name: Clear reboot_required flag after reboot
+      ansible.builtin.set_fact:
+        reboot_required: false
+      when: reboot_required | default(false)

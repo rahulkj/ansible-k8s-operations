@@ -2,80 +2,113 @@
   become: true
   gather_facts: true
   any_errors_fatal: true
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
   tasks:
-    - name: Upgrade Pod network - Canal
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        VERSION=$(curl https://api.github.com/repos/projectcalico/calico/releases | jq -r '.[0] | .tag_name')
-        
-        curl https://raw.githubusercontent.com/projectcalico/calico/$VERSION/manifests/canal.yaml -O
+    # --------------------------------------------------
+    # Antrea (CNI)
+    # --------------------------------------------------
+    - name: Upgrade Antrea pod network
+      ansible.builtin.shell: |
+        VERSION=$(curl -fsSL https://api.github.com/repos/antrea-io/antrea/releases | jq -r '.[0].tag_name')
+        curl -fsSLO https://raw.githubusercontent.com/antrea-io/antrea/${VERSION}/build/yamls/antrea.yml
+        kubectl apply -f antrea.yml
+        rm -f antrea.yml
 
-        kubectl apply -f canal.yaml
-        rm canal.yaml
+    # --------------------------------------------------
+    # MetalLB
+    # --------------------------------------------------
+    - name: Enable strictARP for kube-proxy (MetalLB requirement)
+      ansible.builtin.shell: |
+        kubectl get configmap kube-proxy -n kube-system -o yaml \
+        | sed 's/strictARP: false/strictARP: true/' \
+        | kubectl apply -n kube-system -f -
 
-    - name: Upgrade Loadbalancer
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-
-        kubectl get configmap kube-proxy -n kube-system -o yaml | \
-        sed -e "s/strictARP: false/strictARP: true/" | \
-        kubectl apply -f - -n kube-system
-
-        VERSION=$(curl https://api.github.com/repos/metallb/metallb/releases | jq -r '.[0] | .tag_name')
-        wget https://raw.githubusercontent.com/metallb/metallb/$VERSION/config/manifests/metallb-native.yaml -O metallb-native-$VERSION.yaml
-        kubectl apply -f metallb-native-$VERSION.yaml
+    - name: Upgrade MetalLB
+      ansible.builtin.shell: |
+        VERSION=$(curl -fsSL https://api.github.com/repos/metallb/metallb/releases | jq -r '.[0].tag_name')
+        curl -fsSLO https://raw.githubusercontent.com/metallb/metallb/${VERSION}/config/manifests/metallb-native.yaml
+        kubectl apply -f metallb-native.yaml
         kubectl -n metallb-system rollout status deployment/controller --watch=true
-        rm metallb-native-$VERSION.yaml
+        rm -f metallb-native.yaml
 
-    - name: Copy metallb config file
-      copy:
+    - name: Copy MetalLB configuration
+      ansible.builtin.copy:
         src: ../temp/metal-lb-config.yaml
         dest: /tmp/metal-lb-config.yaml
+        mode: "0644"
 
-    - name: Apply metallb config file
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        kubectl apply -f /tmp/metal-lb-config.yaml
+    - name: Apply MetalLB configuration
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/metal-lb-config.yaml
 
+    # --------------------------------------------------
+    # NFS Storage Class
+    # --------------------------------------------------
     - name: Upgrade NFS storage class
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+      ansible.builtin.shell: |
+        helm repo add nfs-subdir-external-provisioner \
+          https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
 
-        helm upgrade --install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
-        --create-namespace \
-        --namespace nfs-provisioner \
-        --set nfs.server={{ lookup('ansible.builtin.env', 'NFS_SERVER') }} \
-        --set nfs.path={{ lookup('ansible.builtin.env', 'NFS_MOUNT') }} \
-        --set storageClass.name=nfs-storage \
-        --set storageClass.defaultClass=true
+        helm upgrade --install nfs-subdir-external-provisioner \
+          nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+          --create-namespace \
+          --namespace nfs-provisioner \
+          --set nfs.server={{ lookup('ansible.builtin.env', 'NFS_SERVER') }} \
+          --set nfs.path={{ lookup('ansible.builtin.env', 'NFS_MOUNT') }} \
+          --set storageClass.name=nfs-storage \
+          --set storageClass.defaultClass=true
 
-    - name: Copy traefik values file
-      copy:
+    # --------------------------------------------------
+    # Traefik Ingress
+    # --------------------------------------------------
+    - name: Copy Traefik values file
+      ansible.builtin.copy:
         src: ../templates/traefik-values.yaml
         dest: /tmp/traefik-values.yaml
+        mode: "0644"
 
-    - name: Upgrade traefik ingress controller
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
+    - name: Upgrade Traefik ingress controller
+      ansible.builtin.shell: |
         helm repo add traefik https://traefik.github.io/charts
         helm repo update
 
         helm upgrade --install traefik traefik/traefik \
-          --create-namespace --namespace traefik \
+          --create-namespace \
+          --namespace traefik \
           -f /tmp/traefik-values.yaml
 
-    - name: Install headlamp dashboard
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml
+    # --------------------------------------------------
+    # Headlamp Dashboard
+    # --------------------------------------------------
+    - name: Install Headlamp dashboard
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml
 
-    - name: Copy headlamp ingress file
-      copy:
+    - name: Copy Headlamp ingress manifest
+      ansible.builtin.copy:
         src: ../temp/headlamp-ingress.yaml
         dest: /tmp/headlamp-ingress.yaml
+        mode: "0644"
 
-    - name: Expose headlamp dashboard via ingress
+    - name: Expose Headlamp via ingress
+      ansible.builtin.command:
+        cmd: kubectl apply -f /tmp/headlamp-ingress.yaml
+
+    # --------------------------------------------------
+    # Metrics Server
+    # --------------------------------------------------
+    - name: Upgrade and patch metrics server to work with self-signed kubelet certs
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        kubectl apply -f /tmp/headlamp-ingress.yaml
+        curl -LO https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+        kubectl apply -f components.yaml
+
+        kubectl -n kube-system patch deployment metrics-server \
+          --type='json' \
+          -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+        
+        kubectl -n kube-system rollout restart deployment metrics-server
+
+        rm components.yaml

@@ -1,201 +1,235 @@
+---
+- import_playbook: ../playbooks/sync-time-playbook.yaml
+
+# =========================
+# APT UPDATE + UPGRADE
+# =========================
 - import_playbook: ../playbooks/apt-update-playbook.yaml
+- import_playbook: ../playbooks/reboot-playbook.yaml
 
-- name: Install common packages on the hosts
+# =========================
+# KERNEL / SYSTEM TUNING
+# =========================
+- name: Configure kernel, sysctl, cgroups
   hosts: all
+  become: true
   any_errors_fatal: true
+
   tasks:
-    - name: Configure sysctl and kernel modules for kubernetes
-      ansible.builtin.stat:
-        path: /etc/modules-load.d/containerd.conf
-      register: containerd_conf_result
+    - name: Load kernel modules
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
 
-    - name: Set containerd kernel modules load file
-      file:
-        path: "/etc/modules-load.d/containerd.conf"
-        state: "touch"
-      when: not containerd_conf_result.stat.exists
-
-    - name: Add containerd kernel modules
-      blockinfile:
-        path: "/etc/modules-load.d/containerd.conf"
-        block: |
-          overlay
-          br_netfilter
-      when: not containerd_conf_result.stat.exists
-
-    - name: Load necessary kernel modules
-      shell: |
-        sudo modprobe overlay
-        sudo modprobe br_netfilter
-
-    - name: Check that the 99-kubernetes-cri.conf exists
-      ansible.builtin.stat:
-        path: /etc/sysctl.d/99-kubernetes-cri.conf
-      register: kubernetes_cri_conf_result
-
-    - name: Set system configurations for Kubernetes networking
-      file:
-        path: "/etc/sysctl.d/99-kubernetes-cri.conf"
-        state: "touch"
-      when: not kubernetes_cri_conf_result.stat.exists
-
-    - name: Add sysctl conf for kubernetes networking
-      blockinfile:
-        path: "/etc/sysctl.d/99-kubernetes-cri.conf"
-        block: |
+    - name: Configure Kubernetes sysctl
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-kubernetes-cri.conf
+        content: |
           net.bridge.bridge-nf-call-iptables = 1
           net.ipv4.ip_forward = 1
           net.bridge.bridge-nf-call-ip6tables = 1
-      when: not kubernetes_cri_conf_result.stat.exists
 
-    - name: Check that the 99-disable-ipv6.conf exists
-      ansible.builtin.stat:
-        path: /etc/sysctl.d/99-disable-ipv6.conf
-      register: ipv6_disable_conf_result
-
-    - name: Set system configurations to disable IPv6
-      file:
-        path: "/etc/sysctl.d/99-disable-ipv6.conf"
-        state: "touch"
-      when: not ipv6_disable_conf_result.stat.exists
-
-    - name: Add sysctl conf to disable IPv6
-      blockinfile:
-        path: "/etc/sysctl.d/99-disable-ipv6.conf"
-        block: |
+    - name: Disable IPv6
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-disable-ipv6.conf
+        content: |
           net.ipv6.conf.all.disable_ipv6 = 1
           net.ipv6.conf.default.disable_ipv6 = 1
           net.ipv6.conf.lo.disable_ipv6 = 1
-      when: not ipv6_disable_conf_result.stat.exists
 
     - name: Apply sysctl settings
-      shell: |
-        sudo sysctl --system
+      ansible.builtin.command: sysctl --system
 
-    - name: Disable swap on the hosts
-      shell: |
-        sudo swapoff -a
-        sudo sed -i '/swap/ s/^\(.*\)$/#\1/g' /etc/fstab
+    - name: Disable swap
+      ansible.builtin.shell: |
+        swapoff -a
+        sed -i '/swap/ s/^/#/' /etc/fstab
 
-    - name: Enable cgroups in ubuntu on rpi
-      shell: |
-        if [ -f /boot/cmdline.txt ]; then
-          FOUND=$(cat /boot/cmdline.txt | grep "cgroup")
-          if [ -z $FOUND ]; then
-            sudo sed -i 's/$/ cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1/' /boot/cmdline.txt
-          fi
+    - name: Enable cgroups (Raspberry Pi)
+      ansible.builtin.shell: |
+        FILE=""
+        for f in /boot/cmdline.txt /boot/firmware/cmdline.txt /boot/firmware/current/cmdline.txt; do
+          [ -f "$f" ] && FILE="$f"
+        done
+
+        if [ -n "$FILE" ] && ! grep -q cgroup "$FILE"; then
+          sed -i 's/$/ cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1/' "$FILE"
+          echo "changed"
         fi
-      register: cgroups_enabled
-    
-    - name: Enable cgroups in 24.04 ubuntu on rpi
-      shell: |
-        ## Ubuntu 24.04 on rpi
-        if [ -f /boot/firmware/cmdline.txt ]; then
-          FOUND=$(cat /boot/firmware/cmdline.txt | grep "cgroup")
-          if [ -z $FOUND ]; then
-            sudo sed -i 's/$/ cgroup_enable=memory cgroup_memory=1/' /boot/firmware/cmdline.txt
-          fi
-        fi
-      register: cgroups_enabled
+      register: cgroup_result
+      changed_when: "'changed' in cgroup_result.stdout"
 
-    - name: Enable cgroups in 25.10 ubuntu on rpi
-      shell: |
-        ## Ubuntu 25.10 on rpi
-        if [ -f /boot/firmware/current/cmdline.txt ]; then
-          FOUND=$(cat /boot/firmware/current/cmdline.txt | grep "cgroup")
-          if [ -z $FOUND ]; then
-            sudo sed -i 's/$/ cgroup_enable=memory cgroup_memory=1/' /boot/firmware/current/cmdline.txt
-          fi
-        fi
-      register: cgroups_enabled
+    - name: Mark reboot required (kernel/cgroups)
+      ansible.builtin.set_fact:
+        reboot_required: true
+      when: cgroup_result.changed
 
-    - name: Export reboot_required fact
-      set_fact:
-        reboot_required: "{{ cgroups_enabled }}"
-
+# =========================
+# REBOOT AFTER KERNEL CHANGES
+# =========================
 - import_playbook: ../playbooks/reboot-playbook.yaml
 
-- name: Install containerd and kubernetes packages
+# =========================
+# CONTAINERD + K8S PACKAGES
+# =========================
+- name: Install containerd and Kubernetes packages
   hosts: all
+  become: true
   any_errors_fatal: true
+
   tasks:
-    - name: install containerd network plugins and configure cgroups
-      shell: |
-        sudo apt-get install -y containerd containernetworking-plugins
-        
-        sudo mkdir -p /etc/containerd
-        
-        containerd config default | sed "s/ShimCgroup = ''/ShimCgroup = ''\n            SystemdCgroup = true/" | sudo tee /etc/containerd/config.toml
+    # --------------------------------------------------
+    # Base packages (single apt transaction)
+    # --------------------------------------------------
+    - name: Install containerd and base networking packages
+      ansible.builtin.apt:
+        name:
+          - containerd
+          - containernetworking-plugins
+          - net-tools
+          - apt-transport-https
+          - curl
+          - ipvsadm
+          - nfs-common
+        state: present
+        update_cache: yes
 
-        sudo systemctl restart containerd
+    # --------------------------------------------------
+    # Containerd configuration (correct + idempotent)
+    # --------------------------------------------------
 
-    - name: Check that the crictl.yaml exists
+    - name: Ensure containerd config directory exists
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
+
+    - name: Check if containerd config exists
       ansible.builtin.stat:
-        path: /etc/crictl.yaml
-      register: crictl_result
+        path: /etc/containerd/config.toml
+      register: containerd_config_stat
 
-    - name: Set system configurations for Kubernetes networking
-      file:
-        path: "/etc/crictl.yaml"
-        state: "touch"
-      when: not crictl_result.stat.exists
+    - name: Generate default containerd config
+      ansible.builtin.command: containerd config default
+      register: containerd_config
+      changed_when: true
+      when: not containerd_config_stat.stat.exists
 
-    - name: Add conf for crictl
-      blockinfile:
-        path: "/etc/crictl.yaml"
-        block: |
+    - name: Write containerd config
+      ansible.builtin.copy:
+        dest: /etc/containerd/config.toml
+        content: "{{ containerd_config.stdout }}"
+        mode: "0644"
+      when: not containerd_config_stat.stat.exists
+
+    - name: Enable systemd cgroups in containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      notify: Restart containerd
+
+    # --------------------------------------------------
+    # crictl configuration (clean + idempotent)
+    # --------------------------------------------------
+    - name: Configure crictl
+      ansible.builtin.copy:
+        dest: /etc/crictl.yaml
+        mode: "0644"
+        content: |
           runtime-endpoint: unix:///run/containerd/containerd.sock
           image-endpoint: unix:///run/containerd/containerd.sock
           timeout: 2
           debug: true
           pull-image-on-create: false
 
-    - name: Check that the kubernetes keyring file exists
-      ansible.builtin.stat:
+    # --------------------------------------------------
+    # Kubernetes APT repository (modern + idempotent)
+    # --------------------------------------------------
+
+    - name: Ensure apt keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: yes
+
+    - name: Remove existing Kubernetes keyring (fix bad runs)
+      ansible.builtin.file:
         path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      register: kubernetes_keyring_result
+        state: absent
 
-    - name: install and configure dependencies
-      shell: |
-        sudo apt-get update && sudo apt-get install -y apt-transport-https curl ipvsadm
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        sudo chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      when: not kubernetes_keyring_result.stat.exists
+    - name: Install Kubernetes signing key (official method)
+      ansible.builtin.shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/Release.key \
+        | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-    - name: Check that the kubernetes repo file exists
+    - name: Set permissions on Kubernetes keyring
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        mode: "0644"
+
+    - name: Add Kubernetes apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/ /"
+        filename: kubernetes
+        state: present
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    # --------------------------------------------------
+    # Kubernetes packages (controlled + safe)
+    # --------------------------------------------------
+    - name: Unhold Kubernetes packages
+      ansible.builtin.command: apt-mark unhold kubelet kubeadm kubectl
+      changed_when: false
+
+    - name: Install Kubernetes components
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Hold Kubernetes packages
+      ansible.builtin.command: apt-mark hold kubelet kubeadm kubectl
+      changed_when: false
+
+    # --------------------------------------------------
+    # Reboot detection (correct)
+    # --------------------------------------------------
+    - name: Check if reboot is required
       ansible.builtin.stat:
-        path: /etc/apt/sources.list.d/kubernetes.list
-      register: kubernetes_repo_conf_result
+        path: /var/run/reboot-required
+      register: reboot_flag
 
-    - name: Create kubernetes repo file
-      file:
-        path: "/etc/apt/sources.list.d/kubernetes.list"
-        state: "touch"
-      when: not kubernetes_repo_conf_result.stat.exists
+    - name: Accumulate reboot requirement
+      ansible.builtin.set_fact:
+        reboot_required: "{{ reboot_required | default(false) or reboot_flag.stat.exists }}"
 
-    - name: Add K8s Source
-      blockinfile:
-        path: "/etc/apt/sources.list.d/kubernetes.list"
-        block: |
-          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{k8s.version}}/deb/ /
-
-    - name: install kubernetes packages
-      shell: |
-        sudo apt-get update
-        sudo apt-mark unhold kubelet kubeadm kubectl
-        sudo apt-get purge -y kubelet kubeadm kubectl
-        sudo apt-get install -y kubelet kubeadm kubectl
-        sudo apt-mark hold kubelet kubeadm kubectl
-
-    - name: install nfs-common packages
-      shell: |
-        sudo apt-get update
-        sudo apt-get install -y nfs-common
-      register: reboot_required
-
-    - name: Export reboot_required fact
-      set_fact:
-        reboot_required: "{{ reboot_required }}"
+  handlers:
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+        enabled: true
 
 - import_playbook: ../playbooks/reboot-playbook.yaml
 
@@ -212,19 +246,18 @@
         chdir: $HOME
         creates: cluster_initialized.txt
 
-    - name: Install Pod network - Canal
+    - name: Install Pod network - Antrea
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        VERSION=$(curl https://api.github.com/repos/projectcalico/calico/releases | jq -r '.[0] | .tag_name')
+
+        VERSION=$(curl https://api.github.com/repos/antrea-io/antrea/releases | jq -r '.[0] | .tag_name')
         
-        curl https://raw.githubusercontent.com/projectcalico/calico/$VERSION/manifests/canal.yaml -O
-        kubectl apply -f canal.yaml
-        rm canal.yaml
+        curl https://raw.githubusercontent.com/antrea-io/antrea/$VERSION/build/yamls/antrea.yml -O
+        kubectl apply -f antrea.yml
+        rm antrea.yml
 
     - name: Generate the join command for worker nodes
       become_user: root
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
         kubeadm token create --print-join-command
       register: kubernetes_join_command
 
@@ -251,11 +284,13 @@
 
 - hosts: control_plane
   any_errors_fatal: true
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
   tasks:
     - name: Install Loadbalancer
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-
         kubectl get configmap kube-proxy -n kube-system -o yaml | sed -e "s/strictARP: false/strictARP: true/" | kubectl apply -f - -n kube-system
 
         VERSION=$(curl https://api.github.com/repos/metallb/metallb/releases | jq -r '.[0] | .tag_name')
@@ -271,7 +306,6 @@
 
     - name: Apply metallb config file
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl apply -f /tmp/metal-lb-config.yaml
 
     - name: Install helm cli
@@ -280,7 +314,6 @@
 
     - name: Create NFS storage class
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
         helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
 
         helm upgrade --install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
@@ -298,8 +331,6 @@
 
     - name: Install traefik ingress controller
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-
         helm repo add traefik https://traefik.github.io/charts
         helm upgrade --install traefik traefik/traefik \
           --create-namespace --namespace traefik \
@@ -307,7 +338,6 @@
 
     - name: Install headlamp dashboard
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml
 
     - name: Copy headlamp ingress file
@@ -317,16 +347,43 @@
 
     - name: Expose headlamp dashboard via ingress
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl apply -f /tmp/headlamp-ingress.yaml
 
     - name: Create service account user and assign permissions for accessing headlamp dashboard
       shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl -n kube-system create serviceaccount headlamp-admin
         kubectl create clusterrolebinding headlamp-admin \
           --serviceaccount=kube-system:headlamp-admin \
           --clusterrole=cluster-admin
+
+    - name: Register harbor docker secret in default namespace
+      environment: 
+        HARBOR_REGISTRY_URL: "{{ lookup('ansible.builtin.env', 'HARBOR_REGISTRY_URL') }}"
+        HARBOR_USERNAME: "{{ lookup('ansible.builtin.env', 'HARBOR_USERNAME') }}"
+        HARBOR_PASSWORD: "{{ lookup('ansible.builtin.env', 'HARBOR_PASSWORD') }}"
+      shell: |
+        SECRET=$(kubectl get secrets | grep harbor-registry-secret)
+        
+        if [ -z "$SECRET" ]; then
+          kubectl create secret docker-registry harbor-registry-secret \
+            --docker-server="$HARBOR_REGISTRY_URL" \
+            --docker-username="$HARBOR_USERNAME" \
+            --docker-password="$HARBOR_PASSWORD" \
+            --namespace=default
+        fi
+
+    - name: Deploy and patch metrics server to work with self-signed kubelet certs
+      shell: |
+        curl -LO https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+        kubectl apply -f components.yaml
+
+        kubectl -n kube-system patch deployment metrics-server \
+          --type='json' \
+          -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+        
+        kubectl -n kube-system rollout restart deployment metrics-server
+
+        rm components.yaml
     
     - name: Join Command Output
       debug:
