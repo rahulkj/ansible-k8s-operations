@@ -3,7 +3,6 @@
   hosts: all
   become: true
   any_errors_fatal: true
-  serial: 1   # avoid nuking all nodes at once
 
   vars:
     k8s_packages:
@@ -38,6 +37,12 @@
         enabled: false
       ignore_errors: true
 
+    - name: Unmount containerd mounts
+      ansible.builtin.shell: |
+        mount | grep containerd | awk '{print $3}' | xargs -r umount -lf
+      ignore_errors: true
+
+
     # --------------------------------------------------
     # Reset kubeadm (safe even if not initialized)
     # --------------------------------------------------
@@ -59,7 +64,7 @@
         - /var/lib/cni
         - /etc/cni
         - /opt/cni
-        - /run/flannel
+        - /run/antrea
         - /run/containerd
         - /var/run/kubernetes
 

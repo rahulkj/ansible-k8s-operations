@@ -94,8 +94,29 @@
           - curl
           - ipvsadm
           - nfs-common
+          - monit
         state: present
         update_cache: yes
+
+    # Configure monit to monitor network
+    - name: Configure monit for network monitoring
+      ansible.builtin.copy:
+        dest: /etc/monit/conf.d/network.conf
+        content: |
+          check host internet with address 1.1.1.1
+            if failed ping count 3 with timeout 3 seconds then restart
+            depends on systemd-networkd
+
+          check process systemd-networkd matching "systemd-networkd"
+            start program = "/bin/systemctl start systemd-networkd.service"
+            stop  program = "/bin/systemctl stop systemd-networkd.service"
+        mode: "0644"
+
+    - name: Enable and start monit
+      ansible.builtin.systemd:
+        name: monit
+        state: started
+        enabled: true
 
     # --------------------------------------------------
     # Containerd configuration (correct + idempotent)
