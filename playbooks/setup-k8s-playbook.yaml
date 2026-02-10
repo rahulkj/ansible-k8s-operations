@@ -81,6 +81,14 @@
   any_errors_fatal: true
 
   tasks:
+    - name: Ensure monit log file exists (workaround for postinst bug)
+      ansible.builtin.file:
+        path: /var/log/monit.log
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+
     # --------------------------------------------------
     # Base packages (single apt transaction)
     # --------------------------------------------------
