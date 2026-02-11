@@ -19,6 +19,8 @@
       - nfs-common
       - ipvsadm
       - net-tools
+      - openvswitch-switch
+      - openvswitch-common
 
   tasks:
     # --------------------------------------------------
@@ -156,15 +158,58 @@
     # --------------------------------------------------
     # Final cleanup
     # --------------------------------------------------
-    - name: Remove containerd config
+    - name: Remove configs
       ansible.builtin.file:
-        path: /etc/containerd
+        path: "{{ item }}"
         state: absent
+      loop: 
+        - /etc/containerd
+        - /etc/crictl.yaml
+        - /etc/sysctl.d/99-kubernetes-cri.conf
+        - /etc/sysctl.d/99-disable-ipv6.conf
+        - /etc/modules-load.d/antrea.conf
+        - /etc/modules-load.d/containerd.conf
+        - /etc/modules-load.d/k8s.conf
 
-    - name: Remove crictl config
-      ansible.builtin.file:
-        path: /etc/crictl.yaml
+    - name: Unload Antrea-related kernel modules
+      become: true
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
         state: absent
+      loop:
+        - geneve
+        - vxlan
+        - openvswitch
+        - nf_nat
+        - nf_conntrack
+        - ip_tables
+        - br_netfilter
+        - overlay
+      failed_when: false
+
+    # --------------------------------------------------
+    # Remove cgroups settings 
+    # --------------------------------------------------
+    - name: Remove cgroups configuration
+      become: true
+      shell: |
+        FILE=""
+        for f in /boot/cmdline.txt /boot/firmware/cmdline.txt /boot/firmware/current/cmdline.txt; do
+          [ -f "$f" ] && FILE="$f"
+        done
+
+        if [ -n "$FILE" ]; then
+          awk '{
+            for (i=1; i<=NF; i++) {
+              if ($i != "cgroup_enable=cpuset" &&
+                  $i != "cgroup_enable=memory" &&
+                  $i != "cgroup_memory=1") {
+                printf "%s%s", $i, (i<NF ? OFS : ORS)
+              }
+            }
+          }' $FILE > /tmp/cmdline.txt && mv /tmp/cmdline.txt $FILE
+        fi
+      changed_when: false
 
     # --------------------------------------------------
     # Detect reboot requirement
@@ -174,8 +219,8 @@
         path: /var/run/reboot-required
       register: reboot_flag
 
-    - name: Mark reboot required
+    - name: Accumulate reboot requirement (apt)
       ansible.builtin.set_fact:
-        reboot_required: "{{ reboot_flag.stat.exists }}"
+        reboot_required: "{{ reboot_required | default(true) or reboot_flag.stat.exists }}"
 
 - import_playbook: reboot-playbook.yaml

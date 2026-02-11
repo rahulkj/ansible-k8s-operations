@@ -21,8 +21,13 @@
         name: "{{ item }}"
         state: present
       loop:
-        - overlay
         - br_netfilter
+        - ip_tables
+        - nf_conntrack
+        - nf_nat
+        - vxlan
+        - geneve
+        - overlay
 
     - name: Configure Kubernetes sysctl
       ansible.builtin.copy:
@@ -31,6 +36,8 @@
           net.bridge.bridge-nf-call-iptables = 1
           net.ipv4.ip_forward = 1
           net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.conf.all.rp_filter = 0
+          net.ipv4.conf.default.rp_filter = 0
 
     - name: Disable IPv6
       ansible.builtin.copy:
@@ -48,19 +55,34 @@
         swapoff -a
         sed -i '/swap/ s/^/#/' /etc/fstab
 
-    - name: Enable cgroups (Raspberry Pi)
+    - name: Ensure cgroups enabled in kernel cmdline (Raspberry Pi specific)
       ansible.builtin.shell: |
         FILE=""
         for f in /boot/cmdline.txt /boot/firmware/cmdline.txt /boot/firmware/current/cmdline.txt; do
           [ -f "$f" ] && FILE="$f"
         done
 
-        if [ -n "$FILE" ] && ! grep -q cgroup "$FILE"; then
-          sed -i 's/$/ cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1/' "$FILE"
-          echo "changed"
+        if [ -n "$FILE" ]; then
+          awk '{
+            add_cpuset=1; add_memory=1; add_cgroupmem=1
+            for (i=1;i<=NF;i++){
+              if($i=="cgroup_enable=cpuset") add_cpuset=0
+              if($i=="cgroup_enable=memory") add_memory=0
+              if($i=="cgroup_memory=1") add_cgroupmem=0
+            }
+            printf "%s", $0
+            if(add_cpuset) printf " cgroup_enable=cpuset"
+            if(add_memory) printf " cgroup_enable=memory"
+            if(add_cgroupmem) printf " cgroup_memory=1"
+            printf "\n"
+          }' "$FILE" > /tmp/cmdline && mv /tmp/cmdline "$FILE"
         fi
       register: cgroup_result
-      changed_when: "'changed' in cgroup_result.stdout"
+      changed_when: "'cgroup_enable' in cgroup_result.stdout"
+
+    - name: Force eth0 MTU
+      ansible.builtin.command: ip link set dev eth0 mtu 1500
+      changed_when: false
 
     - name: Mark reboot required (kernel/cgroups)
       ansible.builtin.set_fact:
@@ -81,14 +103,6 @@
   any_errors_fatal: true
 
   tasks:
-    - name: Ensure monit log file exists (workaround for postinst bug)
-      ansible.builtin.file:
-        path: /var/log/monit.log
-        state: touch
-        owner: root
-        group: root
-        mode: "0644"
-
     # --------------------------------------------------
     # Base packages (single apt transaction)
     # --------------------------------------------------
@@ -102,59 +116,21 @@
           - curl
           - ipvsadm
           - nfs-common
-          - monit
+          - openvswitch-switch
+          - openvswitch-common
         state: present
         update_cache: yes
 
-    - name: Ensure Monit config directory exists
-      ansible.builtin.file:
-        path: /etc/monit
-        state: directory
-        mode: "0755"
+    - name: Load Open vSwitch kernel module
+      ansible.builtin.modprobe:
+        name: openvswitch
+        state: present
 
-    - name: Configure Monit HTTP interface
-      ansible.builtin.blockinfile:
-        path: /etc/monit/monitrc
-        marker: "# {mark} ANSIBLE MONIT HTTPD"
-        block: |
-          set httpd port 2812 and
-              use address 0.0.0.0
-              allow admin:monit
-              allow 0.0.0.0/0
-        create: false
-        backup: yes
-        mode: "0600"
-
-    - name: Ensure monitrc permissions are correct
-      ansible.builtin.file:
-        path: /etc/monit/monitrc
-        owner: root
-        group: root
-        mode: "0600"
-
-    # Configure monit to monitor network
-    - name: Configure monit for network monitoring
-      ansible.builtin.copy:
-        dest: /etc/monit/conf.d/network.conf
-        content: |
-          check host internet with address 1.1.1.1
-            if failed ping count 3 with timeout 3 seconds then restart
-            depends on systemd-networkd
-
-          check process systemd-networkd matching "systemd-networkd"
-            start program = "/bin/systemctl start systemd-networkd.service"
-            stop  program = "/bin/systemctl stop systemd-networkd.service"
-        mode: "0644"
-
-    - name: Reload Monit to apply HTTP config
-      ansible.builtin.command: monit reload
-      changed_when: true
-
-    - name: Enable and start monit
+    - name: Enable OVS service
       ansible.builtin.systemd:
-        name: monit
-        state: started
+        name: openvswitch-switch
         enabled: true
+        state: started
 
     # --------------------------------------------------
     # Containerd configuration (correct + idempotent)
@@ -184,11 +160,12 @@
         mode: "0644"
       when: not containerd_config_stat.stat.exists
 
-    - name: Enable systemd cgroups in containerd
+    - name: Enable SystemdCgroup after ShimCgroup in containerd config
       ansible.builtin.replace:
         path: /etc/containerd/config.toml
-        regexp: 'SystemdCgroup = false'
-        replace: 'SystemdCgroup = true'
+        regexp: '^(\\s*ShimCgroup\\s*=\\s*""\\s*)$'
+        replace: '\1\n            SystemdCgroup = true'
+        backup: yes
       notify: Restart containerd
 
     # --------------------------------------------------
@@ -294,6 +271,10 @@
 
 - hosts: control_plane
   any_errors_fatal: true
+
+  vars:
+    antrea_manifest_path: /tmp/antrea.yaml
+
   tasks:
     - name: Initialize the Kubernetes Cluster
       become_user: root
@@ -305,14 +286,73 @@
         chdir: $HOME
         creates: cluster_initialized.txt
 
-    - name: Install Pod network - Antrea
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        VERSION=$(curl https://api.github.com/repos/antrea-io/antrea/releases | jq -r '.[0] | .tag_name')
-        
-        curl https://raw.githubusercontent.com/antrea-io/antrea/$VERSION/build/yamls/antrea.yml -O
-        kubectl apply -f antrea.yml
-        rm antrea.yml
+    # --------------------------------------------------
+    # Download Antrea manifest
+    # --------------------------------------------------
+    - name: Get latest Antrea release version
+      ansible.builtin.shell: |
+        curl -fsSL https://api.github.com/repos/antrea-io/antrea/releases \
+        | jq -r '.[0].tag_name'
+      register: antrea_version_cmd
+      changed_when: false
+
+    - name: Set Antrea version fact
+      ansible.builtin.set_fact:
+        antrea_version: "{{ antrea_version_cmd.stdout }}"
+
+    - name: Download Antrea manifest
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/antrea-io/antrea/{{ antrea_version }}/build/yamls/antrea.yml"
+        dest: "{{ antrea_manifest_path }}"
+        mode: "0644"
+
+    - name: Apply Antrea manifest
+      ansible.builtin.command: >
+        kubectl apply -f {{ antrea_manifest_path }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: true
+
+    # --------------------------------------------------
+    # Wait for Antrea to become ready
+    # --------------------------------------------------
+    - name: Wait for Antrea agent pods
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status ds/antrea-agent --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Wait for Antrea controller
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deploy/antrea-controller --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    # --------------------------------------------------
+    # Safety Net: Ensure OVS never hijacks uplink
+    # --------------------------------------------------
+    - name: Remove OVS uplink-bridge (safety net)
+      ansible.builtin.command: >
+        ovs-vsctl remove Open_vSwitch . other_config uplink-bridge
+      changed_when: false
+      failed_when: false
+
+    # --------------------------------------------------
+    # Validate routing on control-plane node
+    # --------------------------------------------------
+    - name: Check default route is still via eth0
+      ansible.builtin.command: ip route show default
+      register: default_route
+      changed_when: false
+
+    - name: Fail if Antrea hijacked default gateway
+      ansible.builtin.fail:
+        msg: >
+          ❌ Antrea hijacked the default gateway!
+          Default route: {{ default_route.stdout }}
+      when: "'antrea' in default_route.stdout"
 
     - name: Generate the join command for worker nodes
       become_user: root
@@ -367,6 +407,11 @@
       shell: |
         kubectl apply -f /tmp/metal-lb-config.yaml
 
+    - name: Wait for metallb controller to be ready
+      ansible.builtin.command: >
+        kubectl -n metallb-system rollout status deploy/controller --timeout=300s
+      changed_when: false
+
     - name: Install helm cli
       become_user: root
       shell: snap install helm --classic
@@ -383,6 +428,11 @@
         --set storageClass.name=nfs-storage \
         --set storageClass.defaultClass=true
 
+    - name: Wait for NFS storage class to be ready
+      ansible.builtin.command: >
+        kubectl -n nfs-provisioner rollout status deploy/nfs-subdir-external-provisioner --timeout=300s
+      changed_when: false
+
     - name: Copy traefik values file
       copy:
         src: ../templates/traefik-values.yaml
@@ -394,6 +444,11 @@
         helm upgrade --install traefik traefik/traefik \
           --create-namespace --namespace traefik \
           -f /tmp/traefik-values.yaml
+
+    - name: Wait for traefik to be ready
+      ansible.builtin.command: >
+        kubectl -n traefik rollout status deploy/traefik --timeout=300s
+      changed_when: false
 
     - name: Install headlamp dashboard
       shell: |
@@ -407,6 +462,11 @@
     - name: Expose headlamp dashboard via ingress
       shell: |
         kubectl apply -f /tmp/headlamp-ingress.yaml
+
+    - name: Wait for headlamp to be ready
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deploy/headlamp --timeout=300s
+      changed_when: false
 
     - name: Create service account user and assign permissions for accessing headlamp dashboard
       shell: |
@@ -443,6 +503,11 @@
         kubectl -n kube-system rollout restart deployment metrics-server
 
         rm components.yaml
+
+    - name: Wait for metrics server to be ready
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deploy/metrics-server --timeout=300s
+      changed_when: false
     
     - name: Join Command Output
       debug:
