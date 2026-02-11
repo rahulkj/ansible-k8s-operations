@@ -106,6 +106,32 @@
         state: present
         update_cache: yes
 
+    - name: Ensure Monit config directory exists
+      ansible.builtin.file:
+        path: /etc/monit
+        state: directory
+        mode: "0755"
+
+    - name: Configure Monit HTTP interface
+      ansible.builtin.blockinfile:
+        path: /etc/monit/monitrc
+        marker: "# {mark} ANSIBLE MONIT HTTPD"
+        block: |
+          set httpd port 2812 and
+              use address 0.0.0.0
+              allow admin:monit
+              allow 0.0.0.0/0
+        create: false
+        backup: yes
+        mode: "0600"
+
+    - name: Ensure monitrc permissions are correct
+      ansible.builtin.file:
+        path: /etc/monit/monitrc
+        owner: root
+        group: root
+        mode: "0600"
+
     # Configure monit to monitor network
     - name: Configure monit for network monitoring
       ansible.builtin.copy:
@@ -119,6 +145,10 @@
             start program = "/bin/systemctl start systemd-networkd.service"
             stop  program = "/bin/systemctl stop systemd-networkd.service"
         mode: "0644"
+
+    - name: Reload Monit to apply HTTP config
+      ansible.builtin.command: monit reload
+      changed_when: true
 
     - name: Enable and start monit
       ansible.builtin.systemd:
