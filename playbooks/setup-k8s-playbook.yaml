@@ -277,7 +277,7 @@
 
     - name: Install Pod network - Antrea
       shell: |
-
+        export KUBECONFIG=/etc/kubernetes/admin.conf
         VERSION=$(curl https://api.github.com/repos/antrea-io/antrea/releases | jq -r '.[0] | .tag_name')
         
         curl https://raw.githubusercontent.com/antrea-io/antrea/$VERSION/build/yamls/antrea.yml -O
