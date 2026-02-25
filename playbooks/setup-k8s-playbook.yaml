@@ -102,7 +102,7 @@
         kubectl label node {{ item }} metallb=enabled --overwrite
       loop: "{{ groups['worker_nodes'] }}"
 
-- import_playbook: ../playbooks/modules/kube-proxy-hardening.yaml
+- import_playbook: ../playbooks/modules/kubernetes/kube-proxy-hardening.yaml
 
 # =========================
 # INSTALL ADDONS ON CONTROL PLANE
