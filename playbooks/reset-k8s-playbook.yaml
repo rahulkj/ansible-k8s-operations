@@ -3,24 +3,9 @@
   hosts: all
   become: true
   any_errors_fatal: true
-  serial: 1
 
-  vars:
-    k8s_packages:
-      - kubelet
-      - kubeadm
-      - kubectl
-
-    container_packages:
-      - containerd
-      - containernetworking-plugins
-
-    base_packages:
-      - nfs-common
-      - ipvsadm
-      - net-tools
-      - openvswitch-switch
-      - openvswitch-common
+  vars_files:
+    - ../vars/common.yaml
 
   tasks:
     # --------------------------------------------------
@@ -45,7 +30,6 @@
         mount | grep containerd | awk '{print $3}' | xargs -r umount -lf
       ignore_errors: true
 
-
     # --------------------------------------------------
     # Reset kubeadm (safe even if not initialized)
     # --------------------------------------------------
@@ -60,16 +44,7 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      loop:
-        - /etc/kubernetes
-        - /var/lib/kubelet
-        - /var/lib/etcd
-        - /var/lib/cni
-        - /etc/cni
-        - /opt/cni
-        - /run/antrea
-        - /run/containerd
-        - /var/run/kubernetes
+      loop: "{{ cleanup_dirs}}"
 
     # --------------------------------------------------
     # Flush iptables & IPVS (critical)
@@ -128,9 +103,9 @@
         purge: yes
         autoremove: yes
 
-    - name: Purge container runtime packages
+    - name: Purge required packages
       ansible.builtin.apt:
-        name: "{{ container_packages }}"
+        name: "{{ required_packages }}"
         state: absent
         purge: yes
         autoremove: yes
@@ -162,29 +137,14 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      loop: 
-        - /etc/containerd
-        - /etc/crictl.yaml
-        - /etc/sysctl.d/99-kubernetes-cri.conf
-        - /etc/sysctl.d/99-disable-ipv6.conf
-        - /etc/modules-load.d/antrea.conf
-        - /etc/modules-load.d/containerd.conf
-        - /etc/modules-load.d/k8s.conf
+      loop: "{{ cleanup_configs}}"
 
-    - name: Unload Antrea-related kernel modules
+    - name: Unload Flannel-related kernel modules
       become: true
       ansible.builtin.modprobe:
         name: "{{ item }}"
         state: absent
-      loop:
-        - geneve
-        - vxlan
-        - openvswitch
-        - nf_nat
-        - nf_conntrack
-        - ip_tables
-        - br_netfilter
-        - overlay
+      loop: "{{ kernel_modules}}"
       failed_when: false
 
     # --------------------------------------------------
@@ -223,4 +183,4 @@
       ansible.builtin.set_fact:
         reboot_required: "{{ reboot_required | default(true) or reboot_flag.stat.exists }}"
 
-- import_playbook: reboot-playbook.yaml
+- import_playbook: ../playbooks/modules/linux/reboot.yaml

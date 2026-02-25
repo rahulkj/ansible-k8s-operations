@@ -1,359 +1,63 @@
 ---
-- import_playbook: ../playbooks/sync-time-playbook.yaml
+- import_playbook: ../playbooks/modules/linux/sync-time.yaml
 
 # =========================
 # APT UPDATE + UPGRADE
 # =========================
-- import_playbook: ../playbooks/apt-update-playbook.yaml
-- import_playbook: ../playbooks/reboot-playbook.yaml
+- import_playbook: ../playbooks/modules/linux/apt-update.yaml
+- import_playbook: ../playbooks/modules/linux/reboot.yaml
 
 # =========================
-# KERNEL / SYSTEM TUNING
+# KERNEL TUNING
 # =========================
-- name: Configure kernel, sysctl, cgroups
-  hosts: all
-  become: true
-  any_errors_fatal: true
-
-  tasks:
-    - name: Load kernel modules
-      ansible.builtin.modprobe:
-        name: "{{ item }}"
-        state: present
-      loop:
-        - br_netfilter
-        - ip_tables
-        - nf_conntrack
-        - nf_nat
-        - vxlan
-        - geneve
-        - overlay
-
-    - name: Configure Kubernetes sysctl
-      ansible.builtin.copy:
-        dest: /etc/sysctl.d/99-kubernetes-cri.conf
-        content: |
-          net.bridge.bridge-nf-call-iptables = 1
-          net.ipv4.ip_forward = 1
-          net.bridge.bridge-nf-call-ip6tables = 1
-          net.ipv4.conf.all.rp_filter = 0
-          net.ipv4.conf.default.rp_filter = 0
-
-    - name: Disable IPv6
-      ansible.builtin.copy:
-        dest: /etc/sysctl.d/99-disable-ipv6.conf
-        content: |
-          net.ipv6.conf.all.disable_ipv6 = 1
-          net.ipv6.conf.default.disable_ipv6 = 1
-          net.ipv6.conf.lo.disable_ipv6 = 1
-
-    - name: Apply sysctl settings
-      ansible.builtin.command: sysctl --system
-
-    - name: Disable swap
-      ansible.builtin.shell: |
-        swapoff -a
-        sed -i '/swap/ s/^/#/' /etc/fstab
-
-    - name: Ensure cgroups enabled in kernel cmdline (Raspberry Pi specific)
-      ansible.builtin.shell: |
-        FILE=""
-        for f in /boot/cmdline.txt /boot/firmware/cmdline.txt /boot/firmware/current/cmdline.txt; do
-          [ -f "$f" ] && FILE="$f"
-        done
-
-        if [ -n "$FILE" ]; then
-          awk '{
-            add_cpuset=1; add_memory=1; add_cgroupmem=1
-            for (i=1;i<=NF;i++){
-              if($i=="cgroup_enable=cpuset") add_cpuset=0
-              if($i=="cgroup_enable=memory") add_memory=0
-              if($i=="cgroup_memory=1") add_cgroupmem=0
-            }
-            printf "%s", $0
-            if(add_cpuset) printf " cgroup_enable=cpuset"
-            if(add_memory) printf " cgroup_enable=memory"
-            if(add_cgroupmem) printf " cgroup_memory=1"
-            printf "\n"
-          }' "$FILE" > /tmp/cmdline && mv /tmp/cmdline "$FILE"
-        fi
-      register: cgroup_result
-      changed_when: "'cgroup_enable' in cgroup_result.stdout"
-
-    - name: Force eth0 MTU
-      ansible.builtin.command: ip link set dev eth0 mtu 1500
-      changed_when: false
-
-    - name: Mark reboot required (kernel/cgroups)
-      ansible.builtin.set_fact:
-        reboot_required: true
-      when: cgroup_result.changed
+- import_playbook: ../playbooks/modules/kubernetes/kernel-hardening.yaml
+- import_playbook: ../playbooks/modules/kubernetes/network-hardening.yaml
 
 # =========================
 # REBOOT AFTER KERNEL CHANGES
 # =========================
-- import_playbook: ../playbooks/reboot-playbook.yaml
+- import_playbook: ../playbooks/modules/linux/reboot.yaml
 
 # =========================
 # CONTAINERD + K8S PACKAGES
 # =========================
-- name: Install containerd and Kubernetes packages
-  hosts: all
-  become: true
-  any_errors_fatal: true
+- import_playbook: ../playbooks/modules/kubernetes/container-runtime.yaml
+- import_playbook: ../playbooks/modules/kubernetes/kubernetes-repo.yaml
+- import_playbook: ../playbooks/modules/kubernetes/kubernetes-packages.yaml
+- import_playbook: ../playbooks/modules/linux/reboot.yaml
 
-  tasks:
-    # --------------------------------------------------
-    # Base packages (single apt transaction)
-    # --------------------------------------------------
-    - name: Install containerd and base networking packages
-      ansible.builtin.apt:
-        name:
-          - containerd
-          - containernetworking-plugins
-          - net-tools
-          - apt-transport-https
-          - curl
-          - ipvsadm
-          - nfs-common
-          - openvswitch-switch
-          - openvswitch-common
-        state: present
-        update_cache: yes
-
-    - name: Load Open vSwitch kernel module
-      ansible.builtin.modprobe:
-        name: openvswitch
-        state: present
-
-    - name: Enable OVS service
-      ansible.builtin.systemd:
-        name: openvswitch-switch
-        enabled: true
-        state: started
-
-    # --------------------------------------------------
-    # Containerd configuration (correct + idempotent)
-    # --------------------------------------------------
-
-    - name: Ensure containerd config directory exists
-      ansible.builtin.file:
-        path: /etc/containerd
-        state: directory
-        mode: "0755"
-
-    - name: Check if containerd config exists
-      ansible.builtin.stat:
-        path: /etc/containerd/config.toml
-      register: containerd_config_stat
-
-    - name: Generate default containerd config
-      ansible.builtin.command: containerd config default
-      register: containerd_config
-      changed_when: true
-      when: not containerd_config_stat.stat.exists
-
-    - name: Write containerd config
-      ansible.builtin.copy:
-        dest: /etc/containerd/config.toml
-        content: "{{ containerd_config.stdout }}"
-        mode: "0644"
-      when: not containerd_config_stat.stat.exists
-
-    - name: Enable SystemdCgroup after ShimCgroup in containerd config
-      ansible.builtin.replace:
-        path: /etc/containerd/config.toml
-        regexp: '^(\\s*ShimCgroup\\s*=\\s*""\\s*)$'
-        replace: '\1\n            SystemdCgroup = true'
-        backup: yes
-      notify: Restart containerd
-
-    # --------------------------------------------------
-    # crictl configuration (clean + idempotent)
-    # --------------------------------------------------
-    - name: Configure crictl
-      ansible.builtin.copy:
-        dest: /etc/crictl.yaml
-        mode: "0644"
-        content: |
-          runtime-endpoint: unix:///run/containerd/containerd.sock
-          image-endpoint: unix:///run/containerd/containerd.sock
-          timeout: 2
-          debug: true
-          pull-image-on-create: false
-
-    # --------------------------------------------------
-    # Kubernetes APT repository (modern + idempotent)
-    # --------------------------------------------------
-
-    - name: Ensure apt keyrings directory exists
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
-
-    - name: Install required packages
-      ansible.builtin.apt:
-        name:
-          - ca-certificates
-          - curl
-          - gnupg
-        state: present
-        update_cache: yes
-
-    - name: Remove existing Kubernetes keyring (fix bad runs)
-      ansible.builtin.file:
-        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        state: absent
-
-    - name: Install Kubernetes signing key (official method)
-      ansible.builtin.shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/Release.key \
-        | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-    - name: Set permissions on Kubernetes keyring
-      ansible.builtin.file:
-        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        mode: "0644"
-
-    - name: Add Kubernetes apt repository
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/ /"
-        filename: kubernetes
-        state: present
-
-    - name: Update apt cache
-      ansible.builtin.apt:
-        update_cache: yes
-
-    # --------------------------------------------------
-    # Kubernetes packages (controlled + safe)
-    # --------------------------------------------------
-    - name: Unhold Kubernetes packages
-      ansible.builtin.command: apt-mark unhold kubelet kubeadm kubectl
-      changed_when: false
-
-    - name: Install Kubernetes components
-      ansible.builtin.apt:
-        name:
-          - kubelet
-          - kubeadm
-          - kubectl
-        state: present
-        update_cache: yes
-
-    - name: Hold Kubernetes packages
-      ansible.builtin.command: apt-mark hold kubelet kubeadm kubectl
-      changed_when: false
-
-    # --------------------------------------------------
-    # Reboot detection (correct)
-    # --------------------------------------------------
-    - name: Check if reboot is required
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: reboot_flag
-
-    - name: Accumulate reboot requirement
-      ansible.builtin.set_fact:
-        reboot_required: "{{ reboot_required | default(false) or reboot_flag.stat.exists }}"
-
-  handlers:
-    - name: Restart containerd
-      ansible.builtin.systemd:
-        name: containerd
-        state: restarted
-        enabled: true
-
-- import_playbook: ../playbooks/reboot-playbook.yaml
-
+# =========================
+# BOOTSTRAP CONTROL PLANE
+# =========================
 - hosts: control_plane
   any_errors_fatal: true
-
-  vars:
-    antrea_manifest_path: /tmp/antrea.yaml
-
   tasks:
     - name: Initialize the Kubernetes Cluster
       become_user: root
       shell: |
         TOKEN=$(kubeadm token generate)
         IP_ADDR=$(hostname -I | awk '{print $1}')
-        kubeadm init --pod-network-cidr=10.244.0.0/16 --token $TOKEN --control-plane-endpoint "$IP_ADDR:6443" --upload-certs
+        kubeadm init --pod-network-cidr=10.244.0.0/16 \
+          --token $TOKEN \
+          --control-plane-endpoint "$IP_ADDR:6443" \
+          --upload-certs
       args:
         chdir: $HOME
         creates: cluster_initialized.txt
 
-    # --------------------------------------------------
-    # Download Antrea manifest
-    # --------------------------------------------------
-    - name: Get latest Antrea release version
-      ansible.builtin.shell: |
-        curl -fsSL https://api.github.com/repos/antrea-io/antrea/releases \
-        | jq -r '.[0].tag_name'
-      register: antrea_version_cmd
-      changed_when: false
+# =========================
+# INSTALL CNI ON CONTROL PLANE
+# =========================
+- import_playbook: ../playbooks/modules/kubernetes/cni.yaml
 
-    - name: Set Antrea version fact
-      ansible.builtin.set_fact:
-        antrea_version: "{{ antrea_version_cmd.stdout }}"
-
-    - name: Download Antrea manifest
-      ansible.builtin.get_url:
-        url: "https://raw.githubusercontent.com/antrea-io/antrea/{{ antrea_version }}/build/yamls/antrea.yml"
-        dest: "{{ antrea_manifest_path }}"
-        mode: "0644"
-
-    - name: Apply Antrea manifest
-      ansible.builtin.command: >
-        kubectl apply -f {{ antrea_manifest_path }}
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: true
-
-    # --------------------------------------------------
-    # Wait for Antrea to become ready
-    # --------------------------------------------------
-    - name: Wait for Antrea agent pods
-      ansible.builtin.command: >
-        kubectl -n kube-system rollout status ds/antrea-agent --timeout=300s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
-
-    - name: Wait for Antrea controller
-      ansible.builtin.command: >
-        kubectl -n kube-system rollout status deploy/antrea-controller --timeout=300s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
-
-    # --------------------------------------------------
-    # Safety Net: Ensure OVS never hijacks uplink
-    # --------------------------------------------------
-    - name: Remove OVS uplink-bridge (safety net)
-      ansible.builtin.command: >
-        ovs-vsctl remove Open_vSwitch . other_config uplink-bridge
-      changed_when: false
-      failed_when: false
-
-    # --------------------------------------------------
-    # Validate routing on control-plane node
-    # --------------------------------------------------
-    - name: Check default route is still via eth0
-      ansible.builtin.command: ip route show default
-      register: default_route
-      changed_when: false
-
-    - name: Fail if Antrea hijacked default gateway
-      ansible.builtin.fail:
-        msg: >
-          ❌ Antrea hijacked the default gateway!
-          Default route: {{ default_route.stdout }}
-      when: "'antrea' in default_route.stdout"
-
+# =========================
+# COPY JOIN COMMAND FROM CONTROL PLANE
+# =========================
+- hosts: control_plane
+  any_errors_fatal: true
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
     - name: Generate the join command for worker nodes
       become_user: root
       shell: |
@@ -367,152 +71,63 @@
     - name: Copy join command to local file.
       local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="/tmp/kubernetes_join_command" mode=0777
 
+# =========================
+# BOOTSTRAP WORKER NODES
+# =========================
 - hosts: worker_nodes
   become: true
   gather_facts: true
-
   tasks:
     - name: Copy join command from control plane to worker nodes.
       copy:
         src: /tmp/kubernetes_join_command
         dest: /tmp/kubernetes_join_command
         mode: 0777
-
     - name: Join the Worker nodes to the cluster.
       command: sh /tmp/kubernetes_join_command
 
+# =========================
+# SCALE DOWN COREDNS, TWEAK KUBE-PROXY, LABEL NODES, ETC
+# =========================
 - hosts: control_plane
   any_errors_fatal: true
-
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
-
   tasks:
-    - name: Install Loadbalancer
-      shell: |
-        kubectl get configmap kube-proxy -n kube-system -o yaml | sed -e "s/strictARP: false/strictARP: true/" | kubectl apply -f - -n kube-system
-
-        VERSION=$(curl https://api.github.com/repos/metallb/metallb/releases | jq -r '.[0] | .tag_name')
-        wget https://raw.githubusercontent.com/metallb/metallb/$VERSION/config/manifests/metallb-native.yaml -O metallb-native-$VERSION.yaml
-        kubectl apply -f metallb-native-$VERSION.yaml
-        kubectl -n metallb-system rollout status deployment/controller --watch=true
-        rm metallb-native-$VERSION.yaml
-
-    - name: Copy metallb config file
-      copy:
-        src: ../temp/metal-lb-config.yaml
-        dest: /tmp/metal-lb-config.yaml
-
-    - name: Apply metallb config file
-      shell: |
-        kubectl apply -f /tmp/metal-lb-config.yaml
-
-    - name: Wait for metallb controller to be ready
+    - name: Scale CoreDNS to 1 replica
+      command: kubectl -n kube-system scale deployment coredns --replicas=1
+      changed_when: true
+    - name: Label worker nodes for MetalLB
       ansible.builtin.command: >
-        kubectl -n metallb-system rollout status deploy/controller --timeout=300s
-      changed_when: false
+        kubectl label node {{ item }} metallb=enabled --overwrite
+      loop: "{{ groups['worker_nodes'] }}"
 
-    - name: Install helm cli
-      become_user: root
-      shell: snap install helm --classic
+- import_playbook: ../playbooks/modules/kube-proxy-hardening.yaml
 
-    - name: Create NFS storage class
-      shell: |
-        helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+# =========================
+# INSTALL ADDONS ON CONTROL PLANE
+# =========================
+- import_playbook: ../playbooks/modules/addons/loadbalancer-addon.yaml
+- import_playbook: ../playbooks/modules/addons/storage-class-addon.yaml
+- import_playbook: ../playbooks/modules/addons/ingress-controller-addon.yaml
+- import_playbook: ../playbooks/modules/addons/dashboard-addon.yaml
+- import_playbook: ../playbooks/modules/addons/observability-addon.yaml
 
-        helm upgrade --install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
-        --create-namespace \
-        --namespace nfs-provisioner \
-        --set nfs.server={{ lookup('ansible.builtin.env', 'NFS_SERVER') }} \
-        --set nfs.path={{ lookup('ansible.builtin.env', 'NFS_MOUNT') }} \
-        --set storageClass.name=nfs-storage \
-        --set storageClass.defaultClass=true
+- import_playbook: ../playbooks/modules/addons/argocd-addon.yaml
+  when: argocd_addon == true | default(false)
 
-    - name: Wait for NFS storage class to be ready
-      ansible.builtin.command: >
-        kubectl -n nfs-provisioner rollout status deploy/nfs-subdir-external-provisioner --timeout=300s
-      changed_when: false
-
-    - name: Copy traefik values file
-      copy:
-        src: ../templates/traefik-values.yaml
-        dest: /tmp/traefik-values.yaml
-
-    - name: Install traefik ingress controller
-      shell: |
-        helm repo add traefik https://traefik.github.io/charts
-        helm upgrade --install traefik traefik/traefik \
-          --create-namespace --namespace traefik \
-          -f /tmp/traefik-values.yaml
-
-    - name: Wait for traefik to be ready
-      ansible.builtin.command: >
-        kubectl -n traefik rollout status deploy/traefik --timeout=300s
-      changed_when: false
-
-    - name: Install headlamp dashboard
-      shell: |
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml
-
-    - name: Copy headlamp ingress file
-      copy:
-        src: ../temp/headlamp-ingress.yaml
-        dest: /tmp/headlamp-ingress.yaml
-
-    - name: Expose headlamp dashboard via ingress
-      shell: |
-        kubectl apply -f /tmp/headlamp-ingress.yaml
-
-    - name: Wait for headlamp to be ready
-      ansible.builtin.command: >
-        kubectl -n kube-system rollout status deploy/headlamp --timeout=300s
-      changed_when: false
-
-    - name: Create service account user and assign permissions for accessing headlamp dashboard
-      shell: |
-        kubectl -n kube-system create serviceaccount headlamp-admin
-        kubectl create clusterrolebinding headlamp-admin \
-          --serviceaccount=kube-system:headlamp-admin \
-          --clusterrole=cluster-admin
-
-    - name: Register harbor docker secret in default namespace
-      environment: 
-        HARBOR_REGISTRY_URL: "{{ lookup('ansible.builtin.env', 'HARBOR_REGISTRY_URL') }}"
-        HARBOR_USERNAME: "{{ lookup('ansible.builtin.env', 'HARBOR_USERNAME') }}"
-        HARBOR_PASSWORD: "{{ lookup('ansible.builtin.env', 'HARBOR_PASSWORD') }}"
-      shell: |
-        SECRET=$(kubectl get secrets | grep harbor-registry-secret)
-        
-        if [ -z "$SECRET" ]; then
-          kubectl create secret docker-registry harbor-registry-secret \
-            --docker-server="$HARBOR_REGISTRY_URL" \
-            --docker-username="$HARBOR_USERNAME" \
-            --docker-password="$HARBOR_PASSWORD" \
-            --namespace=default
-        fi
-
-    - name: Deploy and patch metrics server to work with self-signed kubelet certs
-      shell: |
-        curl -LO https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-        kubectl apply -f components.yaml
-
-        kubectl -n kube-system patch deployment metrics-server \
-          --type='json' \
-          -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
-        
-        kubectl -n kube-system rollout restart deployment metrics-server
-
-        rm components.yaml
-
-    - name: Wait for metrics server to be ready
-      ansible.builtin.command: >
-        kubectl -n kube-system rollout status deploy/metrics-server --timeout=300s
-      changed_when: false
-    
-    - name: Join Command Output
+# =========================
+# PRINT OUTPUT
+# =========================
+- hosts: control_plane
+  any_errors_fatal: true
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Next Steps
       debug:
         msg: 
-        - "SSH to the host, and run the commands"
+        - "SSH to the control plane host ({{ hostvars[inventory_hostname].ansible_host | default(ansible_facts['default_ipv4']['address']) }}) and run the commands:"
         - "mkdir -p $HOME/.kube"
         - "sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config"
         - "sudo chown $(id -u):$(id -g) $HOME/.kube/config"

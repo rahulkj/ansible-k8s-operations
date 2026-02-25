@@ -86,26 +86,29 @@ fi
 
 case $1 in
     k8s-bootstrap)
-        case $2 in
-            pi)
-                export IP_POOL=$PI_IP_POOL
+        k8s-setup)
+            case $2 in
+                pi)
+                    export IP_POOL=$PI_IP_POOL
+                    export ETH_IDENTIFIER=$PI_ETH_IDENTIFIER
                 ;;
-            vm)
-                export IP_POOL=$VM_IP_POOL
+                vm)
+                    export IP_POOL=$VMS_IP_POOL
+                    export ETH_IDENTIFIER=$VM_ETH_IDENTIFIER
                 ;;
-            *)
-                usage_instructions
-                exit 1
+                *)
+                    usage_instructions
+                    exit 1
                 ;;
-        esac
-
-        export PLATFORM="$2"
-
-        envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
-        envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml                
-        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-
-        ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml
+            esac
+            
+            export PLATFORM="$2"
+            envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
+            envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml
+            envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
+            envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
+            
+            ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "argocd_addon=$ARGO_CD_ADDON"
         ;;
     k8s-destroy)
         case $2 in
@@ -146,12 +149,12 @@ case $1 in
         esac
 
         export PLATFORM="$2"
-
         envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
         envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml
+        envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
         envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-
-        ansible-playbook playbooks/upgrade-k8s-packages-playbook.yaml -i temp/inventory-updated.yaml
+        
+        ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "argocd_addon=$ARGO_CD_ADDON"
         ;;
     *)
         usage_instructions

@@ -1,40 +1,8 @@
 # --------------------------------------------------
 # Base OS updates
 # --------------------------------------------------
-- import_playbook: ../playbooks/apt-update-playbook.yaml
-
-# --------------------------------------------------
-# Kubernetes APT repository
-# --------------------------------------------------
-- name: Ensure Kubernetes APT repository
-  hosts: all
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Ensure apt keyrings directory exists
-      file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
-
-    - name: Install Kubernetes signing key
-      shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/Release.key \
-        | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-    - name: Configure Kubernetes repository
-      copy:
-        dest: /etc/apt/sources.list.d/kubernetes.list
-        mode: "0644"
-        content: |
-          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s.version }}/deb/ /
-
-    - name: Update apt cache
-      apt:
-        update_cache: yes
+- import_playbook: ../playbooks/modules/linux/apt-update.yaml
+- import_playbook: ../playbooks/modules/kubernetes/kubernetes-repo.yaml
 
 # --------------------------------------------------
 # Control Plane Upgrade
@@ -177,4 +145,4 @@
 # --------------------------------------------------
 # Reboot if required
 # --------------------------------------------------
-- import_playbook: ../playbooks/reboot-playbook.yaml
+- import_playbook: ../playbooks/modules/linux/reboot.yaml

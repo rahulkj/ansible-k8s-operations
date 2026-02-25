@@ -1,0 +1,119 @@
+# =========================
+# KERNEL / SYSTEM TUNING
+# =========================
+- name: Configure kernel, sysctl, cgroups
+  hosts: all
+  become: true
+  any_errors_fatal: true
+
+  vars_files:
+    - ../vars/common.yaml
+
+  tasks:
+    - name: Load kernel modules
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ kernel_modules }}"
+
+    - name: Persist kernel modules across reboot
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s-flannel.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          br_netfilter
+          overlay
+
+    - name: Configure Kubernetes sysctl
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: /etc/sysctl.d/99-kubernetes-cri.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.conf.all.rp_filter = 0
+          net.ipv4.conf.default.rp_filter = 0
+
+    - name: Disable IPv6
+      ansible.builtin.copy:
+        mode: '0644'
+        dest: /etc/sysctl.d/99-disable-ipv6.conf
+        content: |
+          net.ipv6.conf.all.disable_ipv6 = 1
+          net.ipv6.conf.default.disable_ipv6 = 1
+          net.ipv6.conf.lo.disable_ipv6 = 1
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl --system
+
+    - name: Disable swap
+      ansible.builtin.shell: |
+        swapoff -a
+        sed -i '/swap/ s/^/#/' /etc/fstab
+
+    - name: Detect Raspberry Pi firmware boot
+      ansible.builtin.stat:
+        path: /boot/firmware/cmdline.txt
+      register: pi_cmdline
+
+    - name: Set platform facts
+      ansible.builtin.set_fact:
+        is_raspberry_pi: "{{ pi_cmdline.stat.exists }}"
+
+    - name: Detect cgroup version
+      ansible.builtin.command: stat -fc %T /sys/fs/cgroup
+      register: cgroup_fs
+      changed_when: false
+
+    - name: Set cgroup version fact
+      ansible.builtin.set_fact:
+        cgroup_version: "{{ 'v2' if cgroup_fs.stdout == 'cgroup2fs' else 'v1' }}"
+
+    - debug:
+        msg: "Detected {{ cgroup_version }} on {{ 'Raspberry Pi' if is_raspberry_pi else 'Ubuntu VM' }}"
+
+    - name: Ensure cgroups enabled in kernel cmdline (Raspberry Pi specific)
+      when: is_raspberry_pi
+      ansible.builtin.shell: |
+        FILE=""
+        for f in /boot/cmdline.txt /boot/firmware/cmdline.txt /boot/firmware/current/cmdline.txt; do
+          [ -f "$f" ] && FILE="$f"
+        done
+
+        if [ -n "$FILE" ]; then
+          awk '{
+            add_cpuset=1; add_memory=1; add_cgroupmem=1
+            for (i=1;i<=NF;i++){
+              if($i=="cgroup_enable=cpuset") add_cpuset=0
+              if($i=="cgroup_enable=memory") add_memory=0
+              if($i=="cgroup_memory=1") add_cgroupmem=0
+            }
+            printf "%s", $0
+            if(add_cpuset) printf " cgroup_enable=cpuset"
+            if(add_memory) printf " cgroup_enable=memory"
+            if(add_cgroupmem) printf " cgroup_memory=1"
+            printf "\n"
+          }' "$FILE" > /tmp/cmdline && mv /tmp/cmdline "$FILE"
+        fi
+      register: cgroup_result
+      changed_when: "'cgroup_enable' in cgroup_result.stdout"
+
+    - name: Ensure cgroup kernel args on Ubuntu VM
+      when: not is_raspberry_pi
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
+        line: 'GRUB_CMDLINE_LINUX="cgroup_enable=memory cgroup_memory=1"'
+      notify: Update grub
+
+    - name: Mark reboot required (kernel/cgroups)
+      ansible.builtin.set_fact:
+        reboot_required: true
+      when: cgroup_result.changed
+
+  handlers:
+    - name: Update grub
+      ansible.builtin.command: update-grub

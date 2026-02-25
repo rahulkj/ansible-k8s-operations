@@ -1,0 +1,42 @@
+# =========================
+# CONTINIOUS DEPLOYMENT ADDON - ARGOCD
+# =========================
+- hosts: control_plane
+  any_errors_fatal: true
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+  tasks:
+    - name: Create namespace (kubectl fallback)
+      command: kubectl create namespace cloudlab
+      register: ns
+      failed_when: false
+      changed_when: "'created' in ns.stdout"
+
+    - name: Deploy argocd
+      shell: |
+        kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+    - name: Copy argocd ingress file
+      copy:
+        src: ../../../temp/argocd-ingress.yaml
+        dest: /tmp/argocd-ingress.yaml
+
+    - name: Expose argocd via ingress
+      shell: |
+        kubectl apply -f /tmp/argocd-ingress.yaml
+
+    - name: Wait for argocd to be ready
+      ansible.builtin.command: >
+        kubectl -n argocd rollout status deploy/argocd-server --timeout=300s
+      changed_when: false
+
+    - name: Next Steps
+      debug:
+        msg: 
+        - "argocd admin initial-password -n argocd"
+        - "argocd login argocd.vm.k8s.lab.int"
+        - "argocd account update-password"
+        - "argocd cluster add <context-name"
+        - "Access argocd UI using https://argocd.vm.k8s.lab.int"

@@ -2,7 +2,6 @@
 - name: Reboot hosts if required
   hosts: all
   become: true
-  serial: 1
 
   tasks:
     - name: Reboot the machine
