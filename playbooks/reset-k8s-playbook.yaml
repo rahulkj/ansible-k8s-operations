@@ -183,4 +183,4 @@
       ansible.builtin.set_fact:
         reboot_required: "{{ reboot_required | default(true) or reboot_flag.stat.exists }}"
 
-- import_playbook: ../playbooks/modules/linux/reboot.yaml
+- import_playbook: ../modules/linux/reboot.yaml

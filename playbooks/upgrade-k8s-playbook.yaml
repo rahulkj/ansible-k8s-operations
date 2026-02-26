@@ -1,8 +1,8 @@
 # --------------------------------------------------
 # Base OS updates
 # --------------------------------------------------
-- import_playbook: ../playbooks/modules/linux/apt-update.yaml
-- import_playbook: ../playbooks/modules/kubernetes/kubernetes-repo.yaml
+- import_playbook: ../modules/linux/apt-update.yaml
+- import_playbook: ../modules/kubernetes/kubernetes-repo.yaml
 
 # --------------------------------------------------
 # Control Plane Upgrade
@@ -145,4 +145,4 @@
 # --------------------------------------------------
 # Reboot if required
 # --------------------------------------------------
-- import_playbook: ../playbooks/modules/linux/reboot.yaml
+- import_playbook: ../modules/linux/reboot.yaml

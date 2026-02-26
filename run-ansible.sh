@@ -87,14 +87,17 @@ fi
 case $1 in
     k8s-bootstrap)
         k8s-setup)
+            EXTRA_ARGS=""
             case $2 in
                 pi)
                     export IP_POOL=$PI_IP_POOL
                     export ETH_IDENTIFIER=$PI_ETH_IDENTIFIER
+                    EXTRA_ARGS="argocd_addon=false kube_proxy_hardening=true"
                 ;;
                 vm)
                     export IP_POOL=$VMS_IP_POOL
                     export ETH_IDENTIFIER=$VM_ETH_IDENTIFIER
+                    EXTRA_ARGS="argocd_addon=true kube_proxy_hardening=false"
                 ;;
                 *)
                     usage_instructions
@@ -108,7 +111,7 @@ case $1 in
             envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
             envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
             
-            ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "argocd_addon=$ARGO_CD_ADDON"
+            ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "$EXTRA_ARGS"
         ;;
     k8s-destroy)
         case $2 in
@@ -135,12 +138,15 @@ case $1 in
         esac
         ;;
     k8s-upgrade-packages)
+        EXTRA_ARGS=""
         case $2 in
             pi)
                 export IP_POOL=$PI_IP_POOL
+                EXTRA_ARGS="argocd_addon=false kube_proxy_hardening=true"
                 ;;
             vm)
                 export IP_POOL=$VM_IP_POOL
+                EXTRA_ARGS="argocd_addon=true kube_proxy_hardening=false"
                 ;;
             *)
                 usage_instructions
@@ -154,7 +160,7 @@ case $1 in
         envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
         envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
         
-        ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "argocd_addon=$ARGO_CD_ADDON"
+        ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "$EXTRA_ARGS"
         ;;
     *)
         usage_instructions

@@ -2,12 +2,12 @@
 # =========================
 # UPGRADE ADDONS ON CONTROL PLANE
 # =========================
-- import_playbook: ../playbooks/modules/kubernetes/cni.yaml
-- import_playbook: ../playbooks/modules/addons/loadbalancer-addon.yaml
-- import_playbook: ../playbooks/modules/addons/storage-class-addon.yaml
-- import_playbook: ../playbooks/modules/addons/ingress-controller-addon.yaml
-- import_playbook: ../playbooks/modules/addons/dashboard-addon.yaml
-- import_playbook: ../playbooks/modules/addons/observability-addon.yaml
+- import_playbook: ../modules/kubernetes/cni.yaml
+- import_playbook: ../modules/addons/loadbalancer-addon.yaml
+- import_playbook: ../modules/addons/storage-class-addon.yaml
+- import_playbook: ../modules/addons/ingress-controller-addon.yaml
+- import_playbook: ../modules/addons/dashboard-addon.yaml
+- import_playbook: ../modules/addons/observability-addon.yaml
 
-- import_playbook: ../playbooks/modules/addons/argocd-addon.yaml
+- import_playbook: ../modules/addons/argocd-addon.yaml
   when: argocd_addon == true | default(false)

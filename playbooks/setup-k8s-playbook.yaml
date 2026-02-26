@@ -1,119 +1,121 @@
 ---
-- import_playbook: ../playbooks/modules/linux/sync-time.yaml
+# - import_playbook: ../modules/linux/sync-time.yaml
 
-# =========================
-# APT UPDATE + UPGRADE
-# =========================
-- import_playbook: ../playbooks/modules/linux/apt-update.yaml
-- import_playbook: ../playbooks/modules/linux/reboot.yaml
+# # =========================
+# # APT UPDATE + UPGRADE
+# # =========================
+# - import_playbook: ../modules/linux/apt-update.yaml
+# - import_playbook: ../modules/linux/reboot.yaml
 
-# =========================
-# KERNEL TUNING
-# =========================
-- import_playbook: ../playbooks/modules/kubernetes/kernel-hardening.yaml
-- import_playbook: ../playbooks/modules/kubernetes/network-hardening.yaml
+# # =========================
+# # KERNEL TUNING
+# # =========================
+# - import_playbook: ../modules/kubernetes/kernel-hardening.yaml
+# - import_playbook: ../modules/kubernetes/network-hardening.yaml
 
-# =========================
-# REBOOT AFTER KERNEL CHANGES
-# =========================
-- import_playbook: ../playbooks/modules/linux/reboot.yaml
+# # =========================
+# # REBOOT AFTER KERNEL CHANGES
+# # =========================
+# - import_playbook: ../modules/linux/reboot.yaml
 
-# =========================
-# CONTAINERD + K8S PACKAGES
-# =========================
-- import_playbook: ../playbooks/modules/kubernetes/container-runtime.yaml
-- import_playbook: ../playbooks/modules/kubernetes/kubernetes-repo.yaml
-- import_playbook: ../playbooks/modules/kubernetes/kubernetes-packages.yaml
-- import_playbook: ../playbooks/modules/linux/reboot.yaml
+# # =========================
+# # CONTAINERD + K8S PACKAGES
+# # =========================
+# - import_playbook: ../modules/kubernetes/container-runtime.yaml
+# - import_playbook: ../modules/kubernetes/kubernetes-repo.yaml
+# - import_playbook: ../modules/kubernetes/kubernetes-packages.yaml
+# - import_playbook: ../modules/linux/reboot.yaml
 
-# =========================
-# BOOTSTRAP CONTROL PLANE
-# =========================
-- hosts: control_plane
-  any_errors_fatal: true
-  tasks:
-    - name: Initialize the Kubernetes Cluster
-      become_user: root
-      shell: |
-        TOKEN=$(kubeadm token generate)
-        IP_ADDR=$(hostname -I | awk '{print $1}')
-        kubeadm init --pod-network-cidr=10.244.0.0/16 \
-          --token $TOKEN \
-          --control-plane-endpoint "$IP_ADDR:6443" \
-          --upload-certs
-      args:
-        chdir: $HOME
-        creates: cluster_initialized.txt
+# # =========================
+# # BOOTSTRAP CONTROL PLANE
+# # =========================
+# - hosts: control_plane
+#   any_errors_fatal: true
+#   tasks:
+#     - name: Initialize the Kubernetes Cluster
+#       become_user: root
+#       shell: |
+#         TOKEN=$(kubeadm token generate)
+#         IP_ADDR=$(hostname -I | awk '{print $1}')
+#         kubeadm init --pod-network-cidr=10.244.0.0/16 \
+#           --token $TOKEN \
+#           --control-plane-endpoint "$IP_ADDR:6443" \
+#           --upload-certs
+#       args:
+#         chdir: $HOME
+#         creates: cluster_initialized.txt
 
-# =========================
-# INSTALL CNI ON CONTROL PLANE
-# =========================
-- import_playbook: ../playbooks/modules/kubernetes/cni.yaml
+# # =========================
+# # INSTALL CNI ON CONTROL PLANE
+# # =========================
+# - import_playbook: ../modules/kubernetes/cni.yaml
 
-# =========================
-# COPY JOIN COMMAND FROM CONTROL PLANE
-# =========================
-- hosts: control_plane
-  any_errors_fatal: true
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
-  tasks:
-    - name: Generate the join command for worker nodes
-      become_user: root
-      shell: |
-        kubeadm token create --print-join-command
-      register: kubernetes_join_command
+# # =========================
+# # COPY JOIN COMMAND FROM CONTROL PLANE
+# # =========================
+# - hosts: control_plane
+#   any_errors_fatal: true
+#   environment:
+#     KUBECONFIG: /etc/kubernetes/admin.conf
+#   tasks:
+#     - name: Generate the join command for worker nodes
+#       become_user: root
+#       shell: |
+#         kubeadm token create --print-join-command
+#       register: kubernetes_join_command
 
-    - name: Join Command Output
-      debug:
-        msg: "{{ kubernetes_join_command.stdout }}"
+#     - name: Join Command Output
+#       debug:
+#         msg: "{{ kubernetes_join_command.stdout }}"
 
-    - name: Copy join command to local file.
-      local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="/tmp/kubernetes_join_command" mode=0777
+#     - name: Copy join command to local file.
+#       local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="/tmp/kubernetes_join_command" mode=0777
 
-# =========================
-# BOOTSTRAP WORKER NODES
-# =========================
-- hosts: worker_nodes
-  become: true
-  gather_facts: true
-  tasks:
-    - name: Copy join command from control plane to worker nodes.
-      copy:
-        src: /tmp/kubernetes_join_command
-        dest: /tmp/kubernetes_join_command
-        mode: 0777
-    - name: Join the Worker nodes to the cluster.
-      command: sh /tmp/kubernetes_join_command
+# # =========================
+# # BOOTSTRAP WORKER NODES
+# # =========================
+# - hosts: worker_nodes
+#   become: true
+#   gather_facts: true
+#   tasks:
+#     - name: Copy join command from control plane to worker nodes.
+#       copy:
+#         src: /tmp/kubernetes_join_command
+#         dest: /tmp/kubernetes_join_command
+#         mode: 0777
+#     - name: Join the Worker nodes to the cluster.
+#       command: sh /tmp/kubernetes_join_command
 
-# =========================
-# SCALE DOWN COREDNS, TWEAK KUBE-PROXY, LABEL NODES, ETC
-# =========================
-- hosts: control_plane
-  any_errors_fatal: true
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
-  tasks:
-    - name: Scale CoreDNS to 1 replica
-      command: kubectl -n kube-system scale deployment coredns --replicas=1
-      changed_when: true
-    - name: Label worker nodes for MetalLB
-      ansible.builtin.command: >
-        kubectl label node {{ item }} metallb=enabled --overwrite
-      loop: "{{ groups['worker_nodes'] }}"
+# # =========================
+# # SCALE DOWN COREDNS, TWEAK KUBE-PROXY, LABEL NODES, ETC
+# # =========================
+# - hosts: control_plane
+#   any_errors_fatal: true
+#   environment:
+#     KUBECONFIG: /etc/kubernetes/admin.conf
+#   tasks:
+#     - name: Scale CoreDNS to 1 replica
+#       command: kubectl -n kube-system scale deployment coredns --replicas=1
+#       changed_when: true
+#     - name: Label worker nodes for MetalLB
+#       ansible.builtin.command: >
+#         kubectl label node {{ item }} metallb=enabled --overwrite
+#       loop: "{{ groups['worker_nodes'] }}"
 
-- import_playbook: ../playbooks/modules/kubernetes/kube-proxy-hardening.yaml
+- import_playbook: ../modules/kubernetes/kube-proxy-hardening.yaml
+  when: kube_proxy_hardening == true | default(false)
 
 # =========================
 # INSTALL ADDONS ON CONTROL PLANE
 # =========================
-- import_playbook: ../playbooks/modules/addons/loadbalancer-addon.yaml
-- import_playbook: ../playbooks/modules/addons/storage-class-addon.yaml
-- import_playbook: ../playbooks/modules/addons/ingress-controller-addon.yaml
-- import_playbook: ../playbooks/modules/addons/dashboard-addon.yaml
-- import_playbook: ../playbooks/modules/addons/observability-addon.yaml
+- import_playbook: ../modules/addons/loadbalancer-addon.yaml
+- import_playbook: ../modules/addons/storage-class-addon.yaml
+- import_playbook: ../modules/addons/ingress-controller-addon.yaml
+- import_playbook: ../modules/addons/dashboard-addon.yaml
+- import_playbook: ../modules/addons/observability-addon.yaml
+- import_playbook: ../modules/addons/registry-secret.yaml
 
-- import_playbook: ../playbooks/modules/addons/argocd-addon.yaml
+- import_playbook: ../modules/addons/argocd-addon.yaml
   when: argocd_addon == true | default(false)
 
 # =========================
