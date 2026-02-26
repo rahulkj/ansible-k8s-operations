@@ -1,0 +1,58 @@
+# =========================
+# CONTAINER NETWORKING INTERFACE - FLANNEL
+# =========================
+- hosts: control_plane
+  any_errors_fatal: true
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+  tasks:
+    # --------------------------------------------------
+    # Download Flannel manifest
+    # --------------------------------------------------
+    - name: Get latest Flannel release version
+      ansible.builtin.shell: |
+        kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      changed_when: true
+
+    - name: Switch Flannel backend from VXLAN to host-gw
+      ansible.builtin.shell: |
+        kubectl -n kube-flannel get configmap kube-flannel-cfg -o json | \
+        jq '.data["net-conf.json"] |=
+            (fromjson |
+            .Backend.Type="host-gw" |
+            tojson)' | \
+        kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: flannel_patch
+      changed_when: "'configured' in flannel_patch.stdout or 'created' in flannel_patch.stdout"
+
+    - name: Rollout Flannel agent daemonset with new changes
+      ansible.builtin.command: >
+        kubectl rollout restart daemonset kube-flannel-ds -n kube-flannel
+      changed_when: false
+
+    # --------------------------------------------------
+    # Wait for Flannel to become ready
+    # --------------------------------------------------
+    - name: Wait for Flannel agent pods
+      ansible.builtin.command: >
+        kubectl -n kube-flannel rollout status ds/kube-flannel-ds --timeout=300s
+      changed_when: false
+
+    # --------------------------------------------------
+    # Validate routing on control-plane node
+    # --------------------------------------------------
+    - name: Check default route is still via eth0
+      ansible.builtin.command: ip route show default
+      register: default_route
+      changed_when: false
+
+    - name: Fail if Flannel hijacked default gateway
+      ansible.builtin.fail:
+        msg: >
+          ❌ Flannel hijacked the default gateway!
+          Default route: {{ default_route.stdout }}
+      when: "'flannel' in default_route.stdout"

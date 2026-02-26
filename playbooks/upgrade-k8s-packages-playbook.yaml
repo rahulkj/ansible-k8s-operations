@@ -10,4 +10,4 @@
 - import_playbook: ../modules/addons/observability-addon.yaml
 
 - import_playbook: ../modules/addons/argocd-addon.yaml
-  when: argocd_addon == true | default(false)
+  when: argocd_addon == "true" | default(false)

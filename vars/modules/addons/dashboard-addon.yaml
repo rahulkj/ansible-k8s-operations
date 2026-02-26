@@ -1,0 +1,53 @@
+# =========================
+# DASHBOARD ADDON - HEADLAMP
+# =========================
+- hosts: control_plane
+  any_errors_fatal: true
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+  tasks:
+    - name: Install / Upgrade headlamp dashboard
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/headlamp/main/kubernetes-headlamp.yaml
+
+    - name: Copy headlamp ingress file
+      copy:
+        src: ../../temp/headlamp-ingress.yaml
+        dest: /tmp/headlamp-ingress.yaml
+
+    - name: Expose headlamp dashboard via ingress
+      shell: |
+        kubectl apply -f /tmp/headlamp-ingress.yaml
+
+    - name: Wait for headlamp to be ready
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deploy/headlamp --timeout=300s
+      changed_when: false
+
+    - name: Ensure Headlamp ServiceAccount and ClusterRoleBinding exist
+      ansible.builtin.shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: headlamp-admin
+          namespace: kube-system
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: headlamp-admin
+        subjects:
+          - kind: ServiceAccount
+            name: headlamp-admin
+            namespace: kube-system
+        roleRef:
+          kind: ClusterRole
+          name: cluster-admin
+          apiGroup: rbac.authorization.k8s.io
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: true

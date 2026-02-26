@@ -103,7 +103,7 @@
       loop: "{{ groups['worker_nodes'] }}"
 
 - import_playbook: ../modules/kubernetes/kube-proxy-hardening.yaml
-  when: kube_proxy_hardening == true | default(false)
+  when: kube_proxy_hardening == "true" | default(false)
 
 # =========================
 # INSTALL ADDONS ON CONTROL PLANE
@@ -116,7 +116,7 @@
 - import_playbook: ../modules/addons/registry-secret.yaml
 
 - import_playbook: ../modules/addons/argocd-addon.yaml
-  when: argocd_addon == true | default(false)
+  when: argocd_addon == "true" | default(false)
 
 # =========================
 # PRINT OUTPUT

@@ -1,0 +1,34 @@
+# =========================
+# KUBE-PROXY TUNING
+# =========================
+- hosts: control_plane
+  any_errors_fatal: true
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Read kube-proxy ConfigMap config
+      ansible.builtin.command: >
+        kubectl -n kube-system get configmap kube-proxy
+        -o jsonpath='{.data.config\.conf}'
+      register: kube_proxy_config
+      changed_when: false
+    
+    - name: Patch kube-proxy ConfigMap to IPVS mode
+      ansible.builtin.command: >
+        kubectl -n kube-system patch configmap kube-proxy
+        --type=merge
+        -p '{{ {"data": {"config.conf": (kube_proxy_config.stdout | regex_replace("mode:\\s*\"?iptables\"?", "mode: \"ipvs\""))}} | to_json }}'
+      when: kube_proxy_config.stdout is search('mode:')
+      changed_when: true
+    
+    - name: Restart kube-proxy
+      ansible.builtin.command: kubectl -n kube-system rollout restart ds/kube-proxy
+      changed_when: true
+    
+    - name: Verify kube-proxy is in IPVS mode
+      ansible.builtin.command: >
+        kubectl -n kube-system get configmap kube-proxy
+        -o jsonpath='{.data.config\.conf}'
+      register: kube_proxy_verify
+      changed_when: false
+      failed_when: "'mode: \"ipvs\"' not in kube_proxy_verify.stdout"

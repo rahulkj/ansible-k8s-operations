@@ -2,14 +2,14 @@
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
-  name: $SITE_NAME
+  name: $DASHBOARD_DEPLOYMENT_NAME
   namespace: kube-system
 spec:
   entryPoints:
     - web
   routes:
-  - match: Host(`$SITE_NAME.$PLATFORM.$DOMAIN_NAME`)
+  - match: Host(`$DASHBOARD_DEPLOYMENT_NAME.$PLATFORM.$DOMAIN_NAME`)
     kind: Rule
     services:
-    - name: $SITE_NAME
+    - name: $DASHBOARD_DEPLOYMENT_NAME
       port: 80

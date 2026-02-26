@@ -1,0 +1,25 @@
+# =========================
+# OBSERVABILITY ADDON - METRICS SERVER
+# =========================
+- hosts: control_plane
+  any_errors_fatal: true
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+  tasks:
+    - name: Deploy and patch metrics server to work with self-signed kubelet certs
+      shell: |
+        curl -LO https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+        kubectl apply -f components.yaml
+
+        kubectl -n kube-system patch deployment metrics-server \
+          --type='json' \
+          -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+        
+        rm components.yaml
+
+    - name: Wait for metrics server to be ready
+      ansible.builtin.command: >
+        kubectl -n kube-system rollout status deploy/metrics-server --timeout=300s
+      changed_when: false

@@ -1,0 +1,41 @@
+# =========================
+# CONTAINERD + K8S PACKAGES
+# =========================
+- name: Install containerd and Kubernetes packages
+  hosts: all
+  become: true
+  any_errors_fatal: true
+
+  vars_files:
+    - ../../vars/common.yaml
+
+  tasks:
+    # --------------------------------------------------
+    # Kubernetes packages (controlled + safe)
+    # --------------------------------------------------
+    - name: Unhold Kubernetes packages
+      ansible.builtin.command: apt-mark unhold kubelet kubeadm kubectl
+      changed_when: false
+
+    - name: Install Kubernetes components
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      loop: "{{ k8s_packages }}"
+
+    - name: Hold Kubernetes packages
+      ansible.builtin.command: apt-mark hold kubelet kubeadm kubectl
+      changed_when: false
+
+    # --------------------------------------------------
+    # Reboot detection (correct)
+    # --------------------------------------------------
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Accumulate reboot requirement
+      ansible.builtin.set_fact:
+        reboot_required: "{{ reboot_required | default(false) or reboot_flag.stat.exists }}"
