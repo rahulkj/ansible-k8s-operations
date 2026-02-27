@@ -171,6 +171,34 @@
         fi
       changed_when: false
 
+    - name: Cleanup INPUT guard rules
+      ansible.builtin.shell: |
+        if iptables -C INPUT {{ item }} &>/dev/null; then
+          iptables -D INPUT {{ item }}
+        fi
+      loop:
+        - "-i lo -j ACCEPT"
+        - "-p tcp --dport 22 -j ACCEPT"
+        - "-p tcp --dport 6443 -j ACCEPT"
+        - "-d {{ ansible_facts['default_ipv4']['address'] }} -j ACCEPT"
+      ignore_errors: true 
+      changed_when: true
+
+    - name: Cleanup FLANNEL-FWD jump from FORWARD
+      ansible.builtin.command: iptables -D FORWARD -j FLANNEL-FWD
+      ignore_errors: true
+      changed_when: false
+
+    - name: Remove IPVS watchdog script
+      ansible.builtin.file:
+        path: /usr/local/sbin/ipvs-watchdog.sh
+        state: absent
+
+    - name: Remove IPVS watchdog cron job
+      ansible.builtin.cron:
+        name: "ipvs watchdog"
+        state: absent
+
     # --------------------------------------------------
     # Detect reboot requirement
     # --------------------------------------------------

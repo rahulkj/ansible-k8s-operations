@@ -6,29 +6,25 @@
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   tasks:
-    - name: Read kube-proxy ConfigMap config
-      ansible.builtin.command: >
-        kubectl -n kube-system get configmap kube-proxy
-        -o jsonpath='{.data.config\.conf}'
-      register: kube_proxy_config
-      changed_when: false
-    
-    - name: Patch kube-proxy ConfigMap to IPVS mode
-      ansible.builtin.command: >
-        kubectl -n kube-system patch configmap kube-proxy
-        --type=merge
-        -p '{{ {"data": {"config.conf": (kube_proxy_config.stdout | regex_replace("mode:\\s*\"?iptables\"?", "mode: \"ipvs\""))}} | to_json }}'
-      when: kube_proxy_config.stdout is search('mode:')
+    - name: Force kube-proxy to ipvs mode (safe apply)
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        kubectl -n kube-system get configmap kube-proxy -o yaml \
+        | sed -E 's/^([[:space:]]*)mode:.*/\1mode: "ipvs"/' \
+        | kubectl apply -f -
+      args:
+        executable: /bin/bash
       changed_when: true
-    
-    - name: Restart kube-proxy
+
+    - name: Restart kube-proxy daemonset if patched
       ansible.builtin.command: kubectl -n kube-system rollout restart ds/kube-proxy
+      when: kube_proxy_conf_dict.mode is not defined or kube_proxy_conf_dict.mode == ""
       changed_when: true
     
-    - name: Verify kube-proxy is in IPVS mode
+    - name: Verify kube-proxy is in ipvs mode
       ansible.builtin.command: >
-        kubectl -n kube-system get configmap kube-proxy
-        -o jsonpath='{.data.config\.conf}'
+        kubectl -n kube-system get configmap kube-proxy -o jsonpath='{.data.config\.conf}'
       register: kube_proxy_verify
       changed_when: false
       failed_when: "'mode: \"ipvs\"' not in kube_proxy_verify.stdout"

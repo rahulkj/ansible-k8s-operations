@@ -48,6 +48,20 @@
         mode: "0644"
       when: not containerd_config_stat.stat.exists
 
+    - name: Check if SystemdCgroup line exists
+      ansible.builtin.shell: "grep -E '^\\s*SystemdCgroup\\s*=' /etc/containerd/config.toml || true"
+      register: systemdcgroup_line
+      changed_when: false
+
+    - name: Ensure SystemdCgroup is set to true if line exists
+      ansible.builtin.lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup\s*='
+        line: 'SystemdCgroup = true'
+        backrefs: false
+      when: systemdcgroup_line.stdout | length > 0
+      notify: Restart containerd
+
     - name: Ensure SystemdCgroup is set in runc options (aligned)
       ansible.builtin.blockinfile:
         path: /etc/containerd/config.toml
@@ -55,6 +69,7 @@
         insertafter: '^\s*ShimCgroup\s*='
         block: |
           SystemdCgroup = true
+      when: systemdcgroup_line.stdout | length == 0
       notify: Restart containerd
 
     - name: Verify containerd cgroup driver

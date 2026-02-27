@@ -48,8 +48,12 @@ kernel_modules:
   - ip_vs_sh
 
 iptables_rules:
-  - { port: 22,   comment: "Allow SSH access" }
-  - { port: 6443, comment: "Allow Kubernetes API server" }
+  - { in_interface: "lo" }                        # loopback
+  - { protocol: "tcp", port: 22 ,rule_num: 1}                 # SSH
+  - { protocol: "tcp", port: 6443, rule_num: 1 }               # Kubernetes API
+  - { destination: "{{ ansible_facts['default_ipv4']['address'] }}" , rule_num: 1}  # Node IP
+  - { source: "10.244.0.0/16", rule_num: 3}
+  - { destination: "10.244.0.0/16"}
 
 ubuntu_clis:
   - git

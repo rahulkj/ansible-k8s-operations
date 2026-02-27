@@ -133,3 +133,29 @@
         - "mkdir -p $HOME/.kube"
         - "sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config"
         - "sudo chown $(id -u):$(id -g) $HOME/.kube/config"
+
+    - name: Ensure $HOME/.kube directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.kube"
+        state: directory
+        mode: '0755'
+        owner: "{{ ansible_facts['user_id'] }}"
+        group: "{{ ansible_facts['user_gid'] }}"
+
+    - name: Copy admin.conf to user's kube config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ ansible_facts['env']['HOME'] }}/.kube/config"
+        owner: "{{ ansible_facts['user_id'] }}"
+        group: "{{ ansible_facts['user_gid'] }}"
+        mode: '0644'
+        backup: yes      # keeps previous config safe
+        force: yes       # overwrite if already exists
+        remote_src: yes  # source is on the remote node
+
+    - name: Ensure ownership of kube config is correct
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.kube/config"
+        owner: "{{ ansible_facts['user_id'] }}"
+        group: "{{ ansible_facts['user_gid'] }}"
+        mode: '0644'

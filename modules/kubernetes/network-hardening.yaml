@@ -2,7 +2,7 @@
 # NETWORKING TUNING
 # =========================
 - name: Configure networking for kubernetes
-  hosts: control_plane
+  hosts: all
   become: true
   any_errors_fatal: true
 
@@ -10,36 +10,17 @@
     - ../../vars/common.yaml
 
   tasks:
-    - name: Allow loopback traffic (INPUT)
+    - name: Allow INPUT guard rules
       ansible.builtin.iptables:
         chain: INPUT
-        in_interface: lo
+        state: present
+        protocol: "{{ item.protocol | default(omit) }}"
+        destination_port: "{{ item.port | default(omit) }}"
+        in_interface: "{{ item.in_interface | default(omit) }}"
+        destination: "{{ item.destination | default(omit) }}"
+        source: "{{ item.source | default(omit) }}"
+        rule_num: "{{ item.rule_num | default(omit) }}"
         jump: ACCEPT
-        rule_num: 1
-        state: present
-
-    - name: Allow loopback traffic (OUTPUT)
-      ansible.builtin.iptables:
-        chain: OUTPUT
-        out_interface: lo
-        jump: ACCEPT
-        rule_num: 1
-        state: present
-    
-    - name: Install iptables-persistent
-      ansible.builtin.apt:
-        name: iptables-persistent
-        state: present
-        update_cache: true
-
-    - name: Ensure SSH and Kubernetes API ports are allowed
-      ansible.builtin.iptables:
-        chain: INPUT
-        protocol: tcp
-        destination_port: "{{ item.port }}"
-        jump: ACCEPT
-        comment: "{{ item.comment }}"
-        state: present
       loop: "{{ iptables_rules }}"
       notify: Save IPTables
 
@@ -48,32 +29,33 @@
       ignore_errors: true
       changed_when: false
 
-    - name: Insert FLANNEL-FWD at top of FORWARD chain
-      ansible.builtin.iptables:
-        chain: FORWARD
-        jump: FLANNEL-FWD
-        rule_num: 1
-        state: present
-
-    - name: Allow pod CIDR source traffic
-      ansible.builtin.iptables:
-        chain: INPUT
-        source: 10.244.0.0/16
-        jump: ACCEPT
-        rule_num: 1
-        state: present
-
-    - name: Allow pod CIDR destination traffic
-      ansible.builtin.iptables:
-        chain: INPUT
-        destination: 10.244.0.0/16
-        jump: ACCEPT
-        rule_num: 1
-        state: present
-
-    - name: Save iptables rules
-      ansible.builtin.command: netfilter-persistent save
+    - name: Detect IPVS reject rule in INPUT
+      ansible.builtin.command: iptables -C INPUT -j KUBE-IPVS-FILTER
+      register: ipvs_filter_present
+      ignore_errors: true
       changed_when: false
+
+    - name: Remove IPVS filter from INPUT if detected
+      ansible.builtin.command: iptables -D INPUT -j KUBE-IPVS-FILTER
+      when:
+        - inventory_hostname in groups['control_plane']
+        - ipvs_filter_present.rc == 0
+
+    - name: Install IPVS watchdog service
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/ipvs-watchdog.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          if iptables -C INPUT -j KUBE-IPVS-FILTER &>/dev/null; then
+            iptables -D INPUT -j KUBE-IPVS-FILTER
+          fi
+
+    - name: Cron IPVS watchdog
+      ansible.builtin.cron:
+        name: "ipvs watchdog"
+        job: "/usr/local/sbin/ipvs-watchdog.sh"
+        minute: "*/1"
 
     - name: Configure conntrack sysctl tuning
       ansible.builtin.copy:
@@ -89,4 +71,9 @@
 
   handlers:
     - name: Save IPTables
-      ansible.builtin.command: iptables-save --file /etc/iptables/rules.v4
+      ansible.builtin.apt:
+        name: iptables-persistent
+        state: present
+        update_cache: true
+    # - name: Save IPTables
+    #   ansible.builtin.command: iptables-save --file /etc/iptables/rules.v4

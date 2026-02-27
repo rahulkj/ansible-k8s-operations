@@ -5,7 +5,7 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-  - $IP_POOL
+    - $IP_POOL
   autoAssign: true
 ---
 apiVersion: metallb.io/v1beta1
@@ -15,4 +15,9 @@ metadata:
   namespace: metallb-system
 spec:
   ipAddressPools:
-  - pool
+    - pool
+  interfaces:
+    - $ETH_IDENTIFIER
+  nodeSelectors:
+    - matchLabels:
+        metallb: enabled

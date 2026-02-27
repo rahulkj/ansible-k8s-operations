@@ -16,15 +16,13 @@
         state: present
       loop: "{{ kernel_modules }}"
 
-    - name: Persist kernel modules across reboot
-      ansible.builtin.copy:
-        dest: /etc/modules-load.d/k8s-flannel.conf
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          br_netfilter
-          overlay
+    - name: Persist IPVS kernel modules
+      ansible.builtin.lineinfile:
+        path: /etc/modules-load.d/k8s-flannel.conf
+        line: "{{ item }}"
+        create: yes
+        state: present
+      loop: "{{ kernel_modules }}"
 
     - name: Configure Kubernetes sysctl
       ansible.builtin.copy:
