@@ -1,9 +1,11 @@
 #!/bin/bash
 
+source .envrc
+
 SSH_PASS_EXISTS=$(which sshpass)
 
-USER_VARIABLES=(PI_USER VM_USER)
-PASSWORD_VARIABLES=(PI_PASSWORD PI_SUDO_PASSWORD VM_PASSWORD VM_SUDO_PASSWORD)
+USER_VARIABLES=(NVIDIA_LINUX_VM_USER PI_USER DOCS_VM_USER PI5_1_USER PI5_2_USER LINUX_USER JUMPBOX_USER HARBOR_USER)
+PASSWORD_VARIABLES=(LINUX_PASSWORD LINUX_SUDO_PASSWORD HARBOR_PASSWORD)
 
 if [[ -z $SSH_PASS_EXISTS ]]; then
     OS=$(uname)
@@ -21,6 +23,18 @@ cleanupFile() {
     fi
 }
 
+if [ -z ${ENV} ]; then
+    export ENV
+    read -s -p "Enter which environment you want to work on (local): " ENV
+    echo
+    
+fi
+
+if [[ "${ENV}" -ne "local" ]]; then
+    echo "Invalid environment specified, should be local. Please update the values and try again."
+    exit 1
+fi
+
 promptUserInput() {
     export $1
     read -s -p "Enter username for $1: " $1
@@ -30,7 +44,7 @@ promptUserInput() {
 usage_instructions() {
     echo "Usage: ./run-ansible.sh <OPTION> <SUB-OPTION>"
     echo "  Options:"
-    echo "    k8s-bootstrap: bootstrap k8s environment"
+    echo "    k8s-setup: setup k8s environment"
     echo "    k8s-destroy: destroy k8s environment"
     echo "    k8s-upgrade: upgrade k8s environment"
     echo "    k8s-upgrade-packages: upgrade k8s packages to the latest version"
@@ -40,7 +54,7 @@ usage_instructions() {
     echo "    vm: operate on VM based lab environment"
     echo
     echo "  Example:"
-    echo "    ./run-ansible.sh k8s-bootstrap pi"
+    echo "    ./run-ansible.sh k8s-setup pi"
     echo "    ./run-ansible.sh k8s-destroy vm"
     echo "    ./run-ansible.sh k8s-upgrade pi"
     echo "    ./run-ansible.sh k8s-upgrade-packages vm"
@@ -84,89 +98,97 @@ if [[ -z "$1" ]]; then
     exit 1
 fi
 
-case $1 in
-    k8s-bootstrap)
-        k8s-setup)
-            EXTRA_ARGS=""
-            case $2 in
-                pi)
-                    export IP_POOL=$PI_IP_POOL
-                    export ETH_IDENTIFIER=$PI_ETH_IDENTIFIER
-                    EXTRA_ARGS="argocd_addon=false kube_proxy_hardening=true"
-                ;;
-                vm)
-                    export IP_POOL=$VMS_IP_POOL
-                    export ETH_IDENTIFIER=$VM_ETH_IDENTIFIER
-                    EXTRA_ARGS="argocd_addon=true kube_proxy_hardening=false"
-                ;;
-                *)
-                    usage_instructions
-                    exit 1
-                ;;
-            esac
-            
-            export PLATFORM="$2"
-            envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
-            envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml
-            envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
-            envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-            
-            ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "$EXTRA_ARGS"
-        ;;
-    k8s-destroy)
-        case $2 in
-            pi|vm)
+case $ENV in
+    local)
+        case $1 in
+            k8s-setup)
+                EXTRA_ARGS=""
+                case $2 in
+                    pi)
+                        export IP_POOL=$PI_IP_POOL
+                        export ETH_IDENTIFIER=$PI_ETH_IDENTIFIER
+                        EXTRA_ARGS="argocd_addon=false kube_proxy_hardening=true"
+                    ;;
+                    vm)
+                        export IP_POOL=$VMS_IP_POOL
+                        export ETH_IDENTIFIER=$VM_ETH_IDENTIFIER
+                        EXTRA_ARGS="argocd_addon=true kube_proxy_hardening=false"
+                    ;;
+                    *)
+                        usage_instructions
+                        exit 1
+                    ;;
+                esac
+                
+                export PLATFORM="$2"
+                envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
+                envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml
+                envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
                 envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-                ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
-                ;;
-            *)
-                usage_instructions
-                exit 1
-                ;;
-        esac
-        ;;
-    k8s-upgrade)
-        case $2 in
-            pi|vm)
+                
+                ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "$EXTRA_ARGS"
+            ;;
+            k8s-destroy)
+                case $2 in
+                    pi|vm)
+                        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
+                        ansible-playbook playbooks/reset-k8s-playbook.yaml -i temp/inventory-updated.yaml
+                    ;;
+                    *)
+                        usage_instructions
+                        exit 1
+                    ;;
+                esac
+            ;;
+            k8s-upgrade)
+                case $2 in
+                    pi|vm)
+                        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
+                        ansible-playbook playbooks/upgrade-k8s-playbook.yaml -i temp/inventory-updated.yaml
+                    ;;
+                    *)
+                        usage_instructions
+                        exit 1
+                    ;;
+                esac
+            ;;
+            k8s-upgrade-packages)
+                EXTRA_ARGS=""
+                case $2 in
+                    pi)
+                        export IP_POOL=$PI_IP_POOL
+                        export ETH_IDENTIFIER=$PI_ETH_IDENTIFIER
+                        EXTRA_ARGS="argocd_addon=false kube_proxy_hardening=true"
+                    ;;
+                    vm)
+                        export IP_POOL=$VMS_IP_POOL
+                        export ETH_IDENTIFIER=$VM_ETH_IDENTIFIER
+                        EXTRA_ARGS="argocd_addon=true kube_proxy_hardening=false"
+                    ;;
+                    *)
+                        usage_instructions
+                        exit 1
+                    ;;
+                esac
+                
+                export PLATFORM="$2"
+                envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
+                envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml
+                envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
                 envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-                ansible-playbook playbooks/upgrade-k8s-playbook.yaml -i temp/inventory-updated.yaml
-                ;;
+                
+                ansible-playbook playbooks/upgrade-k8s-packages-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "$EXTRA_ARGS"
+            ;;
             *)
                 usage_instructions
                 exit 1
-                ;;
+            ;;
         esac
-        ;;
-    k8s-upgrade-packages)
-        EXTRA_ARGS=""
-        case $2 in
-            pi)
-                export IP_POOL=$PI_IP_POOL
-                EXTRA_ARGS="argocd_addon=false kube_proxy_hardening=true"
-                ;;
-            vm)
-                export IP_POOL=$VM_IP_POOL
-                EXTRA_ARGS="argocd_addon=true kube_proxy_hardening=false"
-                ;;
-            *)
-                usage_instructions
-                exit 1
-                ;;
-        esac
-
-        export PLATFORM="$2"
-        envsubst < templates/metal-lb-config.yaml > temp/metal-lb-config.yaml
-        envsubst < templates/headlamp-ingress.yaml > temp/headlamp-ingress.yaml
-        envsubst < templates/argocd-ingress.yaml > temp/argocd-ingress.yaml
-        envsubst < config/$2-k8s-inventory.yaml > temp/inventory-updated.yaml
-        
-        ansible-playbook playbooks/setup-k8s-playbook.yaml -i temp/inventory-updated.yaml --extra-vars "$EXTRA_ARGS"
-        ;;
+    ;;
     *)
         usage_instructions
         exit 1
-        ;;
+    ;;
 esac
-;;
 
 cleanupFile

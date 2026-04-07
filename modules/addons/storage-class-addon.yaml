@@ -15,6 +15,7 @@
     - name: Create NFS storage class
       shell: |
         helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+        helm repo update
 
         helm upgrade --install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
         --create-namespace \

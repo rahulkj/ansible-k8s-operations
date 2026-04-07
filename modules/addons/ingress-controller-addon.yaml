@@ -16,7 +16,10 @@
 
     - name: Install / Upgrade traefik ingress controller
       shell: |
+        VERSION=$(curl https://api.github.com/repos/traefik/traefik/releases | jq -r '.[0] | .tag_name')
+
         helm repo add traefik https://traefik.github.io/charts
+        helm repo update
         helm upgrade --install traefik traefik/traefik \
           --create-namespace --namespace traefik \
           -f /tmp/traefik-values.yaml
