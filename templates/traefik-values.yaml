@@ -9,8 +9,6 @@ ingressClass:
 providers:
   kubernetesIngress:
     enabled: true
-  kubernetesGateway:
-    enabled: true
   kubernetesCRD:
     enabled: true
 
